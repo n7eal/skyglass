@@ -1,4 +1,4 @@
-// Fetch nearby aircraft from airplanes.live (fallback adsb.lol) and parse the
+// Fetch nearby aircraft from adsb.lol (fallback airplanes.live) and parse the
 // readsb JSON into a vector<Aircraft>.
 //
 // Memory safety (important on the ESP32): we parse straight from the HTTP stream

@@ -1,5 +1,5 @@
 #pragma once
-// Fetches nearby aircraft from airplanes.live (fallback adsb.lol) and parses
+// Fetches nearby aircraft from adsb.lol (fallback airplanes.live) and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>

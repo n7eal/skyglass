@@ -60,8 +60,8 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define IDLE_DIM_MS         20000          // dim the screen after this long without a touch
 
 // ---------- ADS-B API (free, non-commercial) ----------
-#define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
-#define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
+#define ADSB_PRIMARY_HOST   "api.adsb.lol"          // GET /v2/point/{lat}/{lon}/{radius_nm}
+#define ADSB_FALLBACK_HOST  "api.airplanes.live"   // same readsb format
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.
