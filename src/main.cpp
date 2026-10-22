@@ -134,6 +134,7 @@ static bool                  g_typeIcons = true;                     // per-type
 static int                   g_trafficMode = 0;                      // 0 = aircraft, 1 = marine (web/NVS)
 static int                   g_adsbSrc = 0;                          // 0 auto, 1 local only, 2 public only
 static String                g_adsbLocal;                            // dump1090/tar1090 host on the LAN ("" = public feeds)
+static String                g_adsbKey;                              // adsb.lol API key for re-api (web/NVS; empty = none)
 static String                g_aisKey;                               // aisstream.io API key (web/NVS; empty = off)
 static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
@@ -505,6 +506,7 @@ static void loadSettings() {
     g_trafficMode      = p.getInt("traffic", 0);
     g_aisKey           = p.getString("aiskey", "");
     g_adsbLocal        = p.getString("adsblocal", "");
+    g_adsbKey          = p.getString("adsbkey", "");
     g_adsbSrc          = p.getInt("adsbsrc", 0);
     g_time24           = p.getBool("time24", false);
     g_typeIcons        = p.getBool("typeicons", true);
@@ -516,6 +518,7 @@ static void loadSettings() {
     ais_set_key(g_aisKey.c_str());
     g_adsb.setLocalHost(g_adsbLocal.c_str());
     g_adsb.setSourceMode(g_adsbSrc);
+    g_adsb.setApiKey(g_adsbKey.c_str());
     // fonts are baked into the widgets at creation time, so the large-text flag must be
     // in place before display::begin() builds the UI (loadSettings runs first in setup)
     ui_set_large_text(g_bigText);
@@ -860,6 +863,13 @@ static void handleRoot() {
     // slack is free. The check after snprintf reports if this ever stops being enough.
     // Raised from 26624: the page had grown to ~24.6 KB, which is too little slack to
     // add anything to without silently losing the end of the form.
+    // The key field never echoes the key back into the page; it only says whether one
+    // is saved and shows its last four characters so you can tell which.
+    String adsbKeyHint = "paste your adsb.lol key (sk-lol-...)";
+    if (g_adsbKey.length())
+        adsbKeyHint = String("key saved (ends ...") +
+                      g_adsbKey.substring(g_adsbKey.length() > 4 ? g_adsbKey.length() - 4 : 0) +
+                      ") - paste a new one to replace";
     static const size_t BUFSZ = 40960;   // grows with the page; snprintf would silently truncate
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
@@ -996,6 +1006,14 @@ static void handleRoot() {
         "<div style='font-size:12px;opacity:.6;margin-top:6px'>Free key from "
         "<a href='https://aisstream.io' style='color:#9affc8'>aisstream.io</a>. "
         "Coverage is crowd-sourced, so inland locations may see nothing.</div></div>"
+        "<div class=card><div class=t>adsb.lol API key</div>"
+        "<label>Key for re-api.adsb.lol, the primary feed (optional)</label>"
+        "<input type=password autocomplete=off placeholder='%s' onchange='kk(this.value)'>"
+        "<button type=button class=w style='margin-top:10px' onclick='kk(\"\")'>Remove key</button>"
+        "<div style='font-size:12px;opacity:.6;margin-top:6px'>Feeders get a key from "
+        "<a href='https://adsb.lol' style='color:#9affc8'>adsb.lol</a>. It is sent as "
+        "<i>x-api-key</i>. Without one, re-api only answers from a network that feeds "
+        "adsb.lol, and the radar falls back to airplanes.live.</div></div>"
         "<div class=card><div class=t>Local ADS-B receiver</div>"
         "<label>Hostname or IP (blank = use the public feeds)</label>"
         "<input value='%s' placeholder='192.168.1.50 or myreceiver.local' onchange='lf(this.value)'>"
@@ -1129,6 +1147,7 @@ static void handleRoot() {
         "function ak(v){fetch('/ais?key='+encodeURIComponent(v)+'&save=1')}"
         "function lf(v){fetch('/adsblocal?h='+encodeURIComponent(v))}"
         "function ls(v){fetch('/adsblocal?m='+v)}"
+        "function kk(v){fetch('/adsblocal?key='+encodeURIComponent(v)).then(()=>location.reload())}"
         "function mb(c){fetch('/map?v='+(c?1:0)+'&save=1')}"
 #if BOARD_HAS_SD
         "function se(c){fetch('/sdenable?v='+(c?1:0)).then(r=>r.text()).then(t=>alert('microSD '+t))}"
@@ -1177,6 +1196,7 @@ static void handleRoot() {
         npopts.c_str(), epopts.c_str(), popts.c_str(),
         sndStatus,
         tmopts.c_str(), g_aisKey.c_str(),
+        adsbKeyHint.c_str(),
         g_adsbLocal.c_str(), srcopts.c_str(),
         qopts.c_str(), g_qhStart / 60, g_qhStart % 60, g_qhEnd / 60, g_qhEnd % 60,
         updater_auto_check() ? "checked" : "", updater_auto_install() ? "checked" : "",
@@ -1542,6 +1562,17 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         p.putString("adsblocal", g_adsbLocal);
         p.end();
         ADSB_LOG("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
+    }
+    if (g_web.hasArg("key")) {                    // adsb.lol API key (empty = remove)
+        g_adsbKey = g_web.arg("key");
+        g_adsbKey.trim();
+        g_adsb.setApiKey(g_adsbKey.c_str());
+        Preferences p;
+        p.begin("capsuleradar", false);
+        p.putString("adsbkey", g_adsbKey);
+        p.end();
+        // Never log the key itself -- the serial log gets pasted into chats and issues.
+        ADSB_LOG("[adsb] adsb.lol API key %s\n", g_adsbKey.length() ? "saved" : "removed");
     }
     g_web.send(200, "text/plain", "ok");
 }

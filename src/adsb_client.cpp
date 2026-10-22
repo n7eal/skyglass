@@ -119,12 +119,14 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         const bool ok = fetchFrom(srcs[i].host, list, srcs[i].kind);
 
         if (srcs[i].kind == FeedKind::ReApi && !ok &&
-            (_lastHttpCode == 429 || _lastHttpCode == 403)) {
+            (_lastHttpCode == 429 || _lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
             ADSB_LOG("[adsb] %s refused (HTTP %d)%s; using the fallback for %us\n",
                           ADSB_REAPI_HOST, _lastHttpCode,
-                          _lastHttpCode == 403 ? " -- re-api only answers adsb.lol feeders" : "",
+                          _lastHttpCode == 429 ? "" :
+                          _apiKey.length() ? " -- check the adsb.lol API key on the config page"
+                                           : " -- no API key set, and this network is not a known feeder",
                           (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
         }
 
@@ -184,6 +186,8 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
         return false;
     }
     _http.setUserAgent(ADSB_USER_AGENT);
+    // begin() clears custom headers, so this is added fresh on every request.
+    if (kind == FeedKind::ReApi && _apiKey.length()) _http.addHeader("x-api-key", _apiKey);
     _http.addHeader("Accept", "application/json");
 
     const int code = _http.GET();

@@ -43,6 +43,11 @@ public:
     void setSourceMode(int m) { _srcMode = m; }
     int  sourceMode() const { return _srcMode; }
     const char* localHost() const { return _localHost.c_str(); }
+
+    // adsb.lol API key, sent as x-api-key on re-api requests. Empty = no header (re-api
+    // then only answers when the request comes from a network that feeds adsb.lol).
+    void setApiKey(const char* k) { _apiKey = k ? k : ""; _apiKey.trim(); _reapiBackoff = false; }
+    bool hasApiKey() const { return _apiKey.length() > 0; }
     bool lastPollWasLocal() const { return _lastWasLocal; }
     // Host that supplied the last successful poll (for the serial log).
     const char* lastSource() const { return _lastSource; }
@@ -75,6 +80,7 @@ private:
     HTTPClient _http;
     const char* _lastHost = nullptr;
     String _localHost;
+    String _apiKey;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;
     const char* _lastSource = "";
