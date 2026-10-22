@@ -15,6 +15,15 @@
 #include <Arduino.h>
 #include <TinyGPS++.h>
 
+// On the P4 the Serial log never reaches the USB port; mirror the [gps] lines through the
+// ROM printf so the wiring diagnostics below are visible there (same as ADSB_LOG).
+#if defined(BOARD_WAVESHARE_P4_LCD_4C)
+#  include <esp_rom_sys.h>
+#  define GPS_LOG(...) do { Serial.printf(__VA_ARGS__); esp_rom_printf(__VA_ARGS__); } while (0)
+#else
+#  define GPS_LOG(...) Serial.printf(__VA_ARGS__)
+#endif
+
 // ---------------------------------------------------------------------------------
 // Two backends behind one API. A board defines PIN_GPS_RX when it has a plain NMEA
 // module on a UART; otherwise it gets the LC76G-over-I2C path below, which is specific
@@ -35,7 +44,7 @@ bool gps_begin() {
     // a board with nothing plugged into the header must report "no GPS", not "broken GPS".
     // The module emits sentences within a second or two of power-up even without a fix,
     // so gps_poll() promotes s_present the moment it parses a valid one.
-    Serial.printf("[gps] UART%d listening on RX=%d TX=%d @ %d baud\n",
+    GPS_LOG("[gps] UART%d listening on RX=%d TX=%d @ %d baud\n",
                   (int)GPS_UART_NUM, (int)PIN_GPS_RX, (int)PIN_GPS_TX, (int)GPS_BAUD);
     return true;
 }
@@ -53,7 +62,7 @@ void gps_poll() {
     // say "acquiring" rather than "no GPS" while the module is still finding satellites.
     if (!s_present && s_gps.passedChecksum() > 0) {
         s_present = true;
-        Serial.println("[gps] NMEA detected");
+        GPS_LOG("[gps] NMEA detected\n");
     }
 
     static uint32_t lg = 0;
@@ -61,9 +70,9 @@ void gps_poll() {
     if (now - lg > 8000) { lg = now;
         // Same diagnostic ladder as the I2C path: chars=0 means nothing is arriving (check
         // the wiring or swap TX/RX); chars>0 with fix=0 means valid data but no lock yet.
-        Serial.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
-                      (unsigned long)s_gps.charsProcessed(), (unsigned long)s_gps.sentencesWithFix(),
-                      (unsigned long)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
+        GPS_LOG("[gps] chars=%u sent=%u csErr=%u sats=%d fix=%d\n",
+                      (unsigned)s_gps.charsProcessed(), (unsigned)s_gps.sentencesWithFix(),
+                      (unsigned)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
                       (int)gps_has_fix());
     }
 }
@@ -158,7 +167,7 @@ bool gps_begin() {
     Wire.write(QLEN, sizeof(QLEN));
     s_present = (Wire.endTransmission() == 0);        // 0x50 ACKs only on the -G variant
     if (s_present) Wire.setBufferSize(GPS_BUF);       // sized ONCE; never resized at runtime
-    Serial.printf("[gps] LC76G %s\n", s_present ? "detected on I2C" : "not present");
+    GPS_LOG("[gps] LC76G %s\n", s_present ? "detected on I2C" : "not present");
     return s_present;
 }
 
@@ -180,9 +189,9 @@ void gps_poll() {
     // data, just no satellite lock yet (needs clear sky / a few min on a cold start).
     static uint32_t lg = 0;
     if (now - lg > 8000) { lg = now;
-        Serial.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
-                      (unsigned long)s_gps.charsProcessed(), (unsigned long)s_gps.sentencesWithFix(),
-                      (unsigned long)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
+        GPS_LOG("[gps] chars=%u sent=%u csErr=%u sats=%d fix=%d\n",
+                      (unsigned)s_gps.charsProcessed(), (unsigned)s_gps.sentencesWithFix(),
+                      (unsigned)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
                       (int)gps_has_fix());
     }
 }

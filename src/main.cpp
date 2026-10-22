@@ -2337,7 +2337,12 @@ void loop() {
     g_wm.process();                 // service the WiFi config portal (non-blocking)
 #endif
     g_web.handleClient();           // serve the configuration web page
-    if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
+    // Pull NMEA when GPS auto-location is on -- and also until a module has been detected.
+    // A UART module only counts as present once a valid sentence has been parsed, and the
+    // config page only offers "Use GPS for location" once it is present; polling only when
+    // that box was already ticked meant a UART GPS could never be found. Cheap either way:
+    // the UART drain is non-blocking, and the I2C path returns at once when no LC76G ACKed.
+    if (g_useGps || !gps_present()) gps_poll();
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
 #if BOARD_HAS_SD
@@ -2477,6 +2482,9 @@ void loop() {
                 g_requeryKm = queryRadiusKm();
                 g_requery = true;                                       // adsb_task re-queries the new area
                 Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
+#if defined(BOARD_WAVESHARE_P4_LCD_4C)
+                esp_rom_printf("[gps] re-centred to the GPS fix\n");   // ROM printf has no %f
+#endif
             }
         }
     }
