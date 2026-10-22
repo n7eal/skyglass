@@ -67,9 +67,9 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_REAPI_HOST            "re-api.adsb.lol"
 #define ADSB_REAPI_MIN_INTERVAL_MS 6700     // 60000 / 6700 = 8.96 -> at most 9 requests/min
 #define ADSB_REAPI_BACKOFF_MS      60000    // after HTTP 429/403, leave re-api alone this long
-// Fallbacks, tried in this order when re-api fails. GET /v2/point/{lat}/{lon}/{radius_nm}
-#define ADSB_FALLBACK1_HOST "api.airplanes.live"
-#define ADSB_FALLBACK2_HOST "api.adsb.lol"
+// Fallback when re-api fails. GET /v2/point/{lat}/{lon}/{radius_nm}. (api.adsb.lol, the
+// public v2 API, was removed: deprecated.)
+#define ADSB_FALLBACK_HOST  "api.airplanes.live"
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.

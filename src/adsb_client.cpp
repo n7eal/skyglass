@@ -1,5 +1,4 @@
-// Fetch nearby aircraft from adsb.lol's re-api (fallbacks: airplanes.live, then
-// api.adsb.lol) and parse the
+// Fetch nearby aircraft from adsb.lol's re-api (fallback: airplanes.live) and parse the
 // readsb JSON into a vector<Aircraft>.
 //
 // Memory safety (important on the ESP32): we parse straight from the HTTP stream
@@ -93,11 +92,10 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
                           (!_reapiArmed || nowMs - _reapiLastMs >= ADSB_REAPI_MIN_INTERVAL_MS);
 
     struct Src { const char* host; FeedKind kind; };
-    Src srcs[3];
+    Src srcs[2];
     int n = 0;
     if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
-    srcs[n++] = { ADSB_FALLBACK1_HOST, FeedKind::Point };
-    srcs[n++] = { ADSB_FALLBACK2_HOST, FeedKind::Point };
+    srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
 
     // Walk the list until a source returns aircraft.
     //
@@ -124,7 +122,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             (_lastHttpCode == 429 || _lastHttpCode == 403)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
-            Serial.printf("[adsb] %s refused (HTTP %d)%s; using fallbacks for %us\n",
+            ADSB_LOG("[adsb] %s refused (HTTP %d)%s; using the fallback for %us\n",
                           ADSB_REAPI_HOST, _lastHttpCode,
                           _lastHttpCode == 403 ? " -- re-api only answers adsb.lol feeders" : "",
                           (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
@@ -181,7 +179,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
 
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
-        Serial.printf("[adsb] begin failed (%s)\n", host);
+        ADSB_LOG("[adsb] begin failed (%s)\n", host);
         if (local) _plain.stop(); else _client.stop();
         return false;
     }
@@ -193,7 +191,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));
-        Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
+        ADSB_LOG("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
                       code, host, tlsCode, tls,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -220,7 +218,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     DeserializationError err = deserializeJson(doc, jsonStream,
                                                DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
+        ADSB_LOG("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
                       host, err.c_str(), expectedBytes, (unsigned)jsonStream.bytesRead(),
                       responseStream.available(), responseStream.connected());
         _http.end();

@@ -1,6 +1,5 @@
 #pragma once
-// Fetches nearby aircraft from adsb.lol's re-api (fallbacks: airplanes.live, then
-// api.adsb.lol) and parses
+// Fetches nearby aircraft from adsb.lol's re-api (fallback: airplanes.live) and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>
@@ -8,6 +7,16 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include "aircraft.h"
+
+// Feed log lines. On the P4 the Serial log never reaches the USB port, so mirror them
+// through the ROM printf (the path the RESTART banners already use) -- otherwise a
+// failing feed on that board is invisible. The board flag is a -D build flag.
+#if defined(BOARD_WAVESHARE_P4_LCD_4C)
+#  include <esp_rom_sys.h>
+#  define ADSB_LOG(...) do { Serial.printf(__VA_ARGS__); esp_rom_printf(__VA_ARGS__); } while (0)
+#else
+#  define ADSB_LOG(...) Serial.printf(__VA_ARGS__)
+#endif
 
 class AdsbClient {
 public:
@@ -46,7 +55,7 @@ public:
 
 private:
     // How a host is queried.
-    //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (airplanes.live, api.adsb.lol)
+    //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (airplanes.live)
     //   ReApi -- HTTPS /?circle={lat},{lon},{nm}         (re-api.adsb.lol)
     //   Local -- plain HTTP aircraft.json on your own LAN receiver
     enum class FeedKind { Point, ReApi, Local };

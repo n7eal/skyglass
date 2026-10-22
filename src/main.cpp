@@ -237,7 +237,7 @@ static void adsb_task(void*) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
             WiFi.setSleep(false);
-            Serial.printf("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
+            ADSB_LOG("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
             configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");  // local time (web-configurable TZ)
             Serial.println("[web] config: http://" BOARD_HOSTNAME ".local/  (or the IP above)");
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
@@ -272,14 +272,14 @@ static void adsb_task(void*) {
         } else {
             const uint32_t stuckMs = millis() - lastFeedOk;
             if (stuckMs > 180000UL) {
-                Serial.println("[adsb] feed stuck >180s after reassociating -> rebooting");
+                ADSB_LOG("[adsb] feed stuck >180s after reassociating -> rebooting\n");
                 delay(100);
                 esp_rom_printf("\n*** RESTART: feed stuck >180s after reassociating ***\n");
                 ESP.restart();
             } else if (stuckMs > 45000UL && healStage < 1) {
                 // Cheapest rung: reassociate. Costs a second or two of link and nothing
                 // else, and on the P4 it is observed to return within a few seconds.
-                Serial.println("[adsb] feed stuck >45s -> reassociating");
+                ADSB_LOG("[adsb] feed stuck >45s -> reassociating\n");
                 WiFi.reconnect();
                 healStage = 1;
                 healActionMs = millis();
@@ -307,7 +307,7 @@ static void adsb_task(void*) {
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
                 if (g_adsb.poll(fresh)) {
-                    Serial.printf("[adsb] fetched %u aircraft (%s)\n", (unsigned)fresh.size(), g_adsb.lastSource());
+                    ADSB_LOG("[adsb] fetched %u aircraft (%s)\n", (unsigned)fresh.size(), g_adsb.lastSource());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;
@@ -336,13 +336,13 @@ static void adsb_task(void*) {
                         !fresh.empty(), receivedMs, AC_STALE_MS);
                     if (!publish) {
                         if (!retainingEmptySnapshot) {
-                            Serial.printf("[adsb] empty snapshot; retaining contacts for %u ms\n",
+                            ADSB_LOG("[adsb] empty snapshot; retaining contacts for %u ms\n",
                                           (unsigned)AC_STALE_MS);
                             retainingEmptySnapshot = true;
                         }
                     } else {
                         if (retainingEmptySnapshot && fresh.empty())
-                            Serial.println("[adsb] empty snapshot persisted; clearing stale contacts");
+                            ADSB_LOG("[adsb] empty snapshot persisted; clearing stale contacts\n");
                         retainingEmptySnapshot = false;
                         if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
                             g_aircraft.swap(fresh);   // O(1) handoff: no per-Aircraft String copies under the lock
@@ -351,7 +351,7 @@ static void adsb_task(void*) {
                         }
                     }
                 } else {
-                    Serial.println("[adsb] poll failed");
+                    ADSB_LOG("[adsb] poll failed\n");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
                 }
             }
@@ -1541,7 +1541,7 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         p.begin("capsuleradar", false);
         p.putString("adsblocal", g_adsbLocal);
         p.end();
-        Serial.printf("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
+        ADSB_LOG("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
     }
     g_web.send(200, "text/plain", "ok");
 }
