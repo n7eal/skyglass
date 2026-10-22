@@ -60,8 +60,16 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define IDLE_DIM_MS         20000          // dim the screen after this long without a touch
 
 // ---------- ADS-B API (free, non-commercial) ----------
-#define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
-#define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
+// Primary: re-adsb.lol (adsb.lol's readsb "re-api"), GET /?circle={lat},{lon},{radius_nm}. Same readsb
+// aircraft format as the fallbacks. Feeder-only: it answers requests coming from an IP that
+// feeds adsb.lol. Rate limit is 10 requests/minute, so it is hard-gated in AdsbClient::poll
+// to one request per ADSB_REAPI_MIN_INTERVAL_MS -- every attempt counts, failures included.
+#define ADSB_REAPI_HOST            "re-api.adsb.lol"
+#define ADSB_REAPI_MIN_INTERVAL_MS 6700     // 60000 / 6700 = 8.96 -> at most 9 requests/min
+#define ADSB_REAPI_BACKOFF_MS      60000    // after HTTP 429/403, leave re-api alone this long
+// Fallbacks, tried in this order when re-api fails. GET /v2/point/{lat}/{lon}/{radius_nm}
+#define ADSB_FALLBACK1_HOST "api.adsb.lol"
+#define ADSB_FALLBACK2_HOST "api.airplanes.live"
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.
@@ -83,7 +91,7 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_MAX_AIRCRAFT   120             // hard cap parsed per poll (protect RAM in busy areas)
 // When the primary feed answers cleanly but with zero aircraft, re-probe the fallback
 // only every Nth poll. An empty sky is normal and can last hours; see AdsbClient::poll.
-#define ADSB_EMPTY_RECHECK_POLLS 30         // 30 x POLL_INTERVAL_MS = ~1 min while empty
+#define ADSB_EMPTY_RECHECK_POLLS 9          // 9 x ADSB_REAPI_MIN_INTERVAL_MS = ~1 min while empty
 
 // ---------- Self-update (GitHub Pages, published by the web-flasher workflow) ----------
 // The workflow stamps manifest.json with FW_VERSION and publishes firmware.bin beside

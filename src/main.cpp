@@ -295,14 +295,19 @@ static void adsb_task(void*) {
             // it refreshing even while the user taps around — a slow route/photo lookup (below)
             // can block this single network task, so it must never get ahead of the feed.
             const uint32_t nowMs = millis();
-            const uint32_t pollInterval = g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS;
+            uint32_t pollInterval = g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS;
+            // The public feeds are rate-limited (re-api: 10/min), so only a local receiver
+            // that is answering keeps the fast cadence. AdsbClient also hard-gates re-api,
+            // so an early poll (zoom re-query) falls through to the fallbacks instead.
+            if (!g_adsb.lastPollWasLocal() && pollInterval < ADSB_REAPI_MIN_INTERVAL_MS)
+                pollInterval = ADSB_REAPI_MIN_INTERVAL_MS;
             if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
                 lastPoll = nowMs;
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
                 if (g_adsb.poll(fresh)) {
-                    Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
+                    Serial.printf("[adsb] fetched %u aircraft (%s)\n", (unsigned)fresh.size(), g_adsb.lastSource());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;

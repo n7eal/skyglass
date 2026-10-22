@@ -1353,7 +1353,8 @@ static void build_about(void) {
              "#63D8FF HOST#    " BOARD_HOSTNAME ".local\n"
              "#63D8FF IP#      %s\n"
              "#63D8FF UPTIME#  %luh %lum\n"
-             "#63D8FF FEED#    airplanes.live / adsb.lol\n"
+             "#63D8FF FEED#    re-adsb.lol\n"
+             "         adsb.lol / airplanes.live\n"
              // OSM tiles are ODbL: attribution is a licence condition, not a courtesy.
              "#63D8FF MAP#     (c) OpenStreetMap contributors\n"
              "#9AFFC8 github.com/SilentWolf75/skyglass#\n"

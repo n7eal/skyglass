@@ -1,4 +1,5 @@
-// Fetch nearby aircraft from airplanes.live (fallback adsb.lol) and parse the
+// Fetch nearby aircraft from adsb.lol's re-api (fallbacks: api.adsb.lol, then
+// airplanes.live) and parse the
 // readsb JSON into a vector<Aircraft>.
 //
 // Memory safety (important on the ESP32): we parse straight from the HTTP stream
@@ -62,10 +63,11 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     // trip, sub-second data, and it shows whatever your antenna hears.
     if (_localHost.length() && _srcMode != 2) {
         std::vector<Aircraft> localList;
-        const bool ok = fetchFrom(_localHost.c_str(), localList, true);
+        const bool ok = fetchFrom(_localHost.c_str(), localList, FeedKind::Local);
         if (ok && !localList.empty()) {
             s_emptyStreak = 0;
             _lastWasLocal = true;
+            _lastSource = _localHost.c_str();
             out.swap(localList);
             return true;
         }
@@ -81,49 +83,78 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     _lastWasLocal = false;
     if (_srcMode == 1) return false;          // local-only with no host configured
 
-    std::vector<Aircraft> primaryList;
-    bool pOk = fetchFrom(ADSB_PRIMARY_HOST, primaryList);
+    // Public sources in priority order. re-api is only offered while its rate window is
+    // open. The gate lives here rather than in the caller so that nothing -- a zoom
+    // re-query, a failed local poll, a retry -- can push it past 10 requests/minute.
+    const uint32_t nowMs = millis();
+    if (_reapiBackoff && nowMs - _reapiBackoffStart >= ADSB_REAPI_BACKOFF_MS)
+        _reapiBackoff = false;
+    const bool reapiDue = !_reapiBackoff &&
+                          (!_reapiArmed || nowMs - _reapiLastMs >= ADSB_REAPI_MIN_INTERVAL_MS);
 
-    if (pOk && !primaryList.empty()) {
-        s_emptyStreak = 0;
-        out.swap(primaryList);
-        return true;
-    }
+    struct Src { const char* host; FeedKind kind; };
+    Src srcs[3];
+    int n = 0;
+    if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
+    srcs[n++] = { ADSB_FALLBACK1_HOST, FeedKind::Point };
+    srcs[n++] = { ADSB_FALLBACK2_HOST, FeedKind::Point };
 
-    // Decide whether to spend a second HTTPS round-trip on the fallback feed.
+    // Walk the list until a source returns aircraft.
     //
-    // A primary *error* always earns one. A primary that answered cleanly with zero
-    // aircraft usually means the sky really is empty -- and at POLL_INTERVAL_MS that
-    // state can hold all night, so probing every poll would sustain double the request
-    // rate against two free non-commercial APIs. Probe on the first empty (to catch a
-    // feed that has gone silently quiet), then back off.
-    //
-    // The streak resets whenever the fallback *does* return aircraft, which collapses
-    // the backoff to every-poll for exactly the case that justifies it: a primary that
-    // is broken while the fallback still has traffic.
-    bool tryFallback = true;
-    if (pOk) {
-        tryFallback = (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) == 0;
-        ++s_emptyStreak;
-    }
+    // A source *error* always earns a try of the next one. A source that answered cleanly
+    // with zero aircraft usually means the sky really is empty -- and that state can hold
+    // all night, so probing the fallbacks every poll would sustain extra load on free
+    // non-commercial APIs. Probe on the first empty (to catch a feed that has gone silently
+    // quiet), then only every ADSB_EMPTY_RECHECK_POLLS. The streak resets whenever any
+    // source returns aircraft.
+    std::vector<Aircraft> emptyList;
+    bool anyOk = false;
+    const char* emptyHost = "";
+    for (int i = 0; i < n; ++i) {
+        if (anyOk && (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) != 0) break;
 
-    std::vector<Aircraft> fallbackList;
-    bool fOk = false;
-    if (tryFallback) {
-        fOk = fetchFrom(ADSB_FALLBACK_HOST, fallbackList);
-        if (fOk && !fallbackList.empty()) {
+        if (srcs[i].kind == FeedKind::ReApi) {     // the attempt itself counts toward the limit
+            _reapiArmed = true;
+            _reapiLastMs = nowMs;
+        }
+        std::vector<Aircraft> list;
+        const bool ok = fetchFrom(srcs[i].host, list, srcs[i].kind);
+
+        if (srcs[i].kind == FeedKind::ReApi && !ok &&
+            (_lastHttpCode == 429 || _lastHttpCode == 403)) {
+            _reapiBackoff = true;
+            _reapiBackoffStart = nowMs;
+            Serial.printf("[adsb] %s refused (HTTP %d)%s; using fallbacks for %us\n",
+                          ADSB_REAPI_HOST, _lastHttpCode,
+                          _lastHttpCode == 403 ? " -- re-api only answers adsb.lol feeders" : "",
+                          (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
+        }
+
+        if (ok && !list.empty()) {
             s_emptyStreak = 0;
-            out.swap(fallbackList);
+            _lastSource = srcs[i].host;
+            out.swap(list);
             return true;
+        }
+        if (ok && !anyOk) {
+            anyOk = true;
+            emptyHost = srcs[i].host;
+            emptyList.swap(list);
         }
     }
 
-    if (pOk) { out.swap(primaryList); return true; }
-    if (fOk) { out.swap(fallbackList); return true; }
+    if (anyOk) {
+        ++s_emptyStreak;
+        _lastSource = emptyHost;
+        out.swap(emptyList);
+        return true;
+    }
     return false;
 }
 
-bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool local) {
+bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind) {
+    const bool local = (kind == FeedKind::Local);
+    _lastHttpCode = 0;
     char url[192];
     if (local) {
         // tar1090/readsb serve the whole picture the receiver hears -- there is no radius
@@ -131,8 +162,12 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
         // is your own LAN, and TLS to a Pi would buy a handshake every poll for nothing.
         snprintf(url, sizeof(url), "http://%s%s", host, ADSB_LOCAL_PATH);
     } else {
-        const double nm = ceil((double)_rangeKm * 0.539957);        // km -> nautical miles (rounded up)
-        snprintf(url, sizeof(url), "https://%s/v2/point/%.4f/%.4f/%.0f", host, _lat, _lon, nm > 1.0 ? nm : 1.0);
+        double nm = ceil((double)_rangeKm * 0.539957);              // km -> nautical miles (rounded up)
+        if (nm < 1.0) nm = 1.0;
+        if (kind == FeedKind::ReApi)
+            snprintf(url, sizeof(url), "https://%s/?circle=%.5f,%.5f,%.0f", host, _lat, _lon, nm);
+        else
+            snprintf(url, sizeof(url), "https://%s/v2/point/%.4f/%.4f/%.0f", host, _lat, _lon, nm);
     }
 
     bool hostChanged = (_lastHost == nullptr || strcmp(_lastHost, host) != 0);
@@ -154,6 +189,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     _http.addHeader("Accept", "application/json");
 
     const int code = _http.GET();
+    _lastHttpCode = code;
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));

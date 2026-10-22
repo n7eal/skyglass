@@ -1,5 +1,6 @@
 #pragma once
-// Fetches nearby aircraft from airplanes.live (fallback adsb.lol) and parses
+// Fetches nearby aircraft from adsb.lol's re-api (fallbacks: api.adsb.lol, then
+// airplanes.live) and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>
@@ -34,6 +35,8 @@ public:
     int  sourceMode() const { return _srcMode; }
     const char* localHost() const { return _localHost.c_str(); }
     bool lastPollWasLocal() const { return _lastWasLocal; }
+    // Host that supplied the last successful poll (for the serial log).
+    const char* lastSource() const { return _lastSource; }
 
     // Fetch + parse. Returns true on success and fills `out` (replaces contents).
     // On failure, leaves `out` untouched and returns false (caller keeps last good).
@@ -42,9 +45,14 @@ public:
     uint32_t lastOkMs() const { return _lastOkMs; }
 
 private:
-    // One host, one attempt. `local` swaps the HTTPS point-query for a plain-HTTP
-    // fetch of the receiver's aircraft.json.
-    bool fetchFrom(const char* host, std::vector<Aircraft>& out, bool local = false);
+    // How a host is queried.
+    //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (api.adsb.lol, airplanes.live)
+    //   ReApi -- HTTPS /?circle={lat},{lon},{nm}         (re-api.adsb.lol)
+    //   Local -- plain HTTP aircraft.json on your own LAN receiver
+    enum class FeedKind { Point, ReApi, Local };
+
+    // One host, one attempt. Sets _lastHttpCode.
+    bool fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind);
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
@@ -60,4 +68,12 @@ private:
     String _localHost;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;
+    const char* _lastSource = "";
+    int    _lastHttpCode = 0;
+
+    // re-api rate gate. Plain unsigned millis() deltas, so they survive the 49-day wrap.
+    bool     _reapiArmed = false;        // false until the first attempt
+    uint32_t _reapiLastMs = 0;           // millis() of the last attempt (success or not)
+    bool     _reapiBackoff = false;      // refused with 429/403: wait ADSB_REAPI_BACKOFF_MS
+    uint32_t _reapiBackoffStart = 0;
 };
