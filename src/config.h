@@ -62,6 +62,14 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
 #define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
+// Request budget for the public feeds: at most ADSB_MAX_REQ_PER_MIN requests in any rolling
+// 60 s, counted across BOTH hosts and including failed attempts (the limit is 10/min; one
+// spare). Enforced in AdsbClient::poll, so nothing -- a zoom re-query, a fallback, a retry --
+// can exceed it. The public poll cadence matches, so the budget is not used up early.
+#define ADSB_MAX_REQ_PER_MIN       9
+#define ADSB_RATE_WINDOW_MS        60000
+#define ADSB_PUBLIC_MIN_INTERVAL_MS 6700    // 60000 / 6700 = 8.96 polls/min
+#define ADSB_HOST_BACKOFF_MS       60000    // after HTTP 429, leave that host alone this long
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.
@@ -83,7 +91,7 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_MAX_AIRCRAFT   120             // hard cap parsed per poll (protect RAM in busy areas)
 // When the primary feed answers cleanly but with zero aircraft, re-probe the fallback
 // only every Nth poll. An empty sky is normal and can last hours; see AdsbClient::poll.
-#define ADSB_EMPTY_RECHECK_POLLS 30         // 30 x POLL_INTERVAL_MS = ~1 min while empty
+#define ADSB_EMPTY_RECHECK_POLLS 9          // 9 x ADSB_PUBLIC_MIN_INTERVAL_MS = ~1 min while empty
 
 // ---------- Self-update (GitHub Pages, published by the web-flasher workflow) ----------
 // The workflow stamps manifest.json with FW_VERSION and publishes firmware.bin beside

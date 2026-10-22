@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include "aircraft.h"
+#include "config.h"
 
 class AdsbClient {
 public:
@@ -34,6 +35,8 @@ public:
     int  sourceMode() const { return _srcMode; }
     const char* localHost() const { return _localHost.c_str(); }
     bool lastPollWasLocal() const { return _lastWasLocal; }
+    // Host that supplied the last successful poll (for the serial log).
+    const char* lastSource() const { return _lastSource; }
 
     // Fetch + parse. Returns true on success and fills `out` (replaces contents).
     // On failure, leaves `out` untouched and returns false (caller keeps last good).
@@ -45,6 +48,11 @@ private:
     // One host, one attempt. `local` swaps the HTTPS point-query for a plain-HTTP
     // fetch of the receiver's aircraft.json.
     bool fetchFrom(const char* host, std::vector<Aircraft>& out, bool local = false);
+
+    // Rolling-window request budget for the public feeds (ADSB_MAX_REQ_PER_MIN per
+    // ADSB_RATE_WINDOW_MS). Unsigned millis() deltas, so it survives the 49-day wrap.
+    bool budgetAvailable(uint32_t nowMs) const;
+    void spendBudget(uint32_t nowMs);
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
@@ -60,4 +68,14 @@ private:
     String _localHost;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;
+    const char* _lastSource = "";
+    int    _lastHttpCode = 0;
+
+    uint32_t _reqTimes[ADSB_MAX_REQ_PER_MIN] = {};   // ring buffer of request start times
+    int      _reqHead = 0;                           // next slot; the oldest once full
+    int      _reqCount = 0;
+
+    // Per-host 429 backoff: [0] = primary, [1] = fallback.
+    bool     _backoff[2] = { false, false };
+    uint32_t _backoffStart[2] = { 0, 0 };
 };

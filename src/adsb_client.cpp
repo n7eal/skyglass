@@ -66,6 +66,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         if (ok && !localList.empty()) {
             s_emptyStreak = 0;
             _lastWasLocal = true;
+            _lastSource = _localHost.c_str();
             out.swap(localList);
             return true;
         }
@@ -81,49 +82,75 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     _lastWasLocal = false;
     if (_srcMode == 1) return false;          // local-only with no host configured
 
-    std::vector<Aircraft> primaryList;
-    bool pOk = fetchFrom(ADSB_PRIMARY_HOST, primaryList);
+    const uint32_t nowMs = millis();
+    const char* hosts[2] = { ADSB_PRIMARY_HOST, ADSB_FALLBACK_HOST };
 
-    if (pOk && !primaryList.empty()) {
-        s_emptyStreak = 0;
-        out.swap(primaryList);
-        return true;
-    }
-
-    // Decide whether to spend a second HTTPS round-trip on the fallback feed.
+    // Try the primary, then the fallback, until one returns aircraft.
     //
-    // A primary *error* always earns one. A primary that answered cleanly with zero
-    // aircraft usually means the sky really is empty -- and at POLL_INTERVAL_MS that
-    // state can hold all night, so probing every poll would sustain double the request
-    // rate against two free non-commercial APIs. Probe on the first empty (to catch a
-    // feed that has gone silently quiet), then back off.
-    //
-    // The streak resets whenever the fallback *does* return aircraft, which collapses
-    // the backoff to every-poll for exactly the case that justifies it: a primary that
-    // is broken while the fallback still has traffic.
-    bool tryFallback = true;
-    if (pOk) {
-        tryFallback = (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) == 0;
-        ++s_emptyStreak;
-    }
+    // A source *error* always earns a try of the next one -- budget permitting. A source
+    // that answered cleanly with zero aircraft usually means the sky really is empty, and
+    // that can hold all night, so probe the fallback on the first empty (to catch a feed
+    // that has gone silently quiet) and then only every ADSB_EMPTY_RECHECK_POLLS. The
+    // streak resets whenever a source returns aircraft.
+    std::vector<Aircraft> emptyList;
+    bool anyOk = false;
+    const char* emptyHost = "";
+    for (int i = 0; i < 2; ++i) {
+        if (anyOk && (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) != 0) break;
 
-    std::vector<Aircraft> fallbackList;
-    bool fOk = false;
-    if (tryFallback) {
-        fOk = fetchFrom(ADSB_FALLBACK_HOST, fallbackList);
-        if (fOk && !fallbackList.empty()) {
+        if (_backoff[i] && nowMs - _backoffStart[i] >= ADSB_HOST_BACKOFF_MS) _backoff[i] = false;
+        if (_backoff[i]) continue;                      // this host said 429; give it its minute
+        if (!budgetAvailable(nowMs)) {
+            Serial.printf("[adsb] request budget spent (%d/min); skipping %s\n",
+                          ADSB_MAX_REQ_PER_MIN, hosts[i]);
+            break;                                      // no budget for any host this poll
+        }
+
+        spendBudget(nowMs);                             // the attempt counts, success or not
+        std::vector<Aircraft> list;
+        const bool ok = fetchFrom(hosts[i], list);
+
+        if (!ok && _lastHttpCode == 429) {
+            _backoff[i] = true;
+            _backoffStart[i] = nowMs;
+            Serial.printf("[adsb] %s rate-limited us (HTTP 429); pausing it for %us\n",
+                          hosts[i], (unsigned)(ADSB_HOST_BACKOFF_MS / 1000));
+        }
+        if (ok && !list.empty()) {
             s_emptyStreak = 0;
-            out.swap(fallbackList);
+            _lastSource = hosts[i];
+            out.swap(list);
             return true;
+        }
+        if (ok && !anyOk) {
+            anyOk = true;
+            emptyHost = hosts[i];
+            emptyList.swap(list);
         }
     }
 
-    if (pOk) { out.swap(primaryList); return true; }
-    if (fOk) { out.swap(fallbackList); return true; }
+    if (anyOk) {
+        ++s_emptyStreak;
+        _lastSource = emptyHost;
+        out.swap(emptyList);
+        return true;
+    }
     return false;
 }
 
+bool AdsbClient::budgetAvailable(uint32_t nowMs) const {
+    if (_reqCount < ADSB_MAX_REQ_PER_MIN) return true;
+    return nowMs - _reqTimes[_reqHead] >= ADSB_RATE_WINDOW_MS;   // oldest has aged out
+}
+
+void AdsbClient::spendBudget(uint32_t nowMs) {
+    _reqTimes[_reqHead] = nowMs;
+    _reqHead = (_reqHead + 1) % ADSB_MAX_REQ_PER_MIN;
+    if (_reqCount < ADSB_MAX_REQ_PER_MIN) ++_reqCount;
+}
+
 bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool local) {
+    _lastHttpCode = 0;
     char url[192];
     if (local) {
         // tar1090/readsb serve the whole picture the receiver hears -- there is no radius
@@ -154,6 +181,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     _http.addHeader("Accept", "application/json");
 
     const int code = _http.GET();
+    _lastHttpCode = code;
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));
