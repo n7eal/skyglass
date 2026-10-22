@@ -52,6 +52,15 @@ void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
     _lat = homeLat; _lon = homeLon; _rangeKm = rangeKm;
 }
 
+void AdsbClient::setApiKey(const char* k) {
+    _apiKey = k ? k : "";
+    _apiKey.trim();
+    _reapiBackoff = false;                 // a new key deserves an immediate try
+    const unsigned len = _apiKey.length();
+    if (len) snprintf(_keyDesc, sizeof(_keyDesc), "key ...%s", _apiKey.c_str() + (len > 4 ? len - 4 : 0));
+    else     snprintf(_keyDesc, sizeof(_keyDesc), "no key");
+}
+
 bool AdsbClient::poll(std::vector<Aircraft>& out) {
     if (WiFi.status() != WL_CONNECTED) return false;
     // Counts consecutive polls where the primary answered normally but with no aircraft.
@@ -127,8 +136,8 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             (_lastHttpCode == 429 || _lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
-            ADSB_LOG("[adsb] %s refused (HTTP %d)%s; using the other feed for %us\n",
-                          ADSB_REAPI_HOST, _lastHttpCode,
+            ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; using the other feed for %us\n",
+                          ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
                           _lastHttpCode == 429 ? "" :
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
                                            : " -- no API key set, and this network is not a known feeder",
@@ -205,6 +214,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
+        if (kind == FeedKind::ReApi) ADSB_LOG("[adsb]   that re-api request was sent with %s\n", _keyDesc);
         _http.end();
         _client.stop();
         return false;

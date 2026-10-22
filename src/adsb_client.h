@@ -46,7 +46,9 @@ public:
 
     // adsb.lol API key, sent as x-api-key on re-api requests. Empty = no header (re-api
     // then only answers when the request comes from a network that feeds adsb.lol).
-    void setApiKey(const char* k) { _apiKey = k ? k : ""; _apiKey.trim(); _reapiBackoff = false; }
+    void setApiKey(const char* k);
+    // "key ...abcd" (last four characters) or "no key" -- for logs, never the key itself.
+    const char* apiKeyDesc() const { return _keyDesc; }
     bool hasApiKey() const { return _apiKey.length() > 0; }
 
     // Order of the internet feeds (config page "Internet source order").
@@ -89,6 +91,7 @@ private:
     const char* _lastHost = nullptr;
     String _localHost;
     String _apiKey;
+    char   _keyDesc[16] = "no key";
     int    _publicOrder = 0;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;

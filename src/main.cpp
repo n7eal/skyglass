@@ -309,7 +309,12 @@ static void adsb_task(void*) {
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
                 if (g_adsb.poll(fresh)) {
-                    ADSB_LOG("[adsb] fetched %u aircraft (%s)\n", (unsigned)fresh.size(), g_adsb.lastSource());
+                    {
+                        const bool viaReapi = strcmp(g_adsb.lastSource(), ADSB_REAPI_HOST) == 0;
+                        ADSB_LOG("[adsb] fetched %u aircraft (%s%s%s)\n", (unsigned)fresh.size(),
+                                 g_adsb.lastSource(), viaReapi ? ", " : "",
+                                 viaReapi ? g_adsb.apiKeyDesc() : "");
+                    }
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;
@@ -522,6 +527,7 @@ static void loadSettings() {
     g_adsb.setSourceMode(g_adsbSrc);
     g_adsb.setPublicOrder(g_adsbOrder);
     g_adsb.setApiKey(g_adsbKey.c_str());
+    ADSB_LOG("[adsb] adsb.lol API key at boot: %s\n", g_adsb.apiKeyDesc());
     // fonts are baked into the widgets at creation time, so the large-text flag must be
     // in place before display::begin() builds the UI (loadSettings runs first in setup)
     ui_set_large_text(g_bigText);
@@ -1600,7 +1606,8 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         p.putString("adsbkey", g_adsbKey);
         p.end();
         // Never log the key itself -- the serial log gets pasted into chats and issues.
-        ADSB_LOG("[adsb] adsb.lol API key %s\n", g_adsbKey.length() ? "saved" : "removed");
+        ADSB_LOG("[adsb] adsb.lol API key %s (now using %s)\n", g_adsbKey.length() ? "saved" : "removed",
+                 g_adsb.apiKeyDesc());
     }
     g_web.send(200, "text/plain", "ok");
 }
