@@ -94,8 +94,13 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     struct Src { const char* host; FeedKind kind; };
     Src srcs[2];
     int n = 0;
-    if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
-    srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
+    if (_publicOrder == 1) {                     // airplanes.live first
+        srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
+        if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
+    } else {                                     // re-api first (default)
+        if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
+        srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
+    }
 
     // Walk the list until a source returns aircraft.
     //
@@ -122,7 +127,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             (_lastHttpCode == 429 || _lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
-            ADSB_LOG("[adsb] %s refused (HTTP %d)%s; using the fallback for %us\n",
+            ADSB_LOG("[adsb] %s refused (HTTP %d)%s; using the other feed for %us\n",
                           ADSB_REAPI_HOST, _lastHttpCode,
                           _lastHttpCode == 429 ? "" :
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"

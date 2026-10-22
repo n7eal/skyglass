@@ -132,6 +132,7 @@ static int                   g_mapOpa = 85;                          // basemap 
 static bool                  g_time24 = false;                       // false = 12-hour clock (web/NVS)
 static bool                  g_typeIcons = true;                     // per-type aircraft silhouettes (web/NVS)
 static int                   g_trafficMode = 0;                      // 0 = aircraft, 1 = marine (web/NVS)
+static int                   g_adsbOrder = 0;                        // internet feed order (see AdsbClient::setPublicOrder)
 static int                   g_adsbSrc = 0;                          // 0 auto, 1 local only, 2 public only
 static String                g_adsbLocal;                            // dump1090/tar1090 host on the LAN ("" = public feeds)
 static String                g_adsbKey;                              // adsb.lol API key for re-api (web/NVS; empty = none)
@@ -508,6 +509,7 @@ static void loadSettings() {
     g_adsbLocal        = p.getString("adsblocal", "");
     g_adsbKey          = p.getString("adsbkey", "");
     g_adsbSrc          = p.getInt("adsbsrc", 0);
+    g_adsbOrder        = p.getInt("adsborder", 0);
     g_time24           = p.getBool("time24", false);
     g_typeIcons        = p.getBool("typeicons", true);
     g_bigText          = p.getBool("bigtext", false);
@@ -518,6 +520,7 @@ static void loadSettings() {
     ais_set_key(g_aisKey.c_str());
     g_adsb.setLocalHost(g_adsbLocal.c_str());
     g_adsb.setSourceMode(g_adsbSrc);
+    g_adsb.setPublicOrder(g_adsbOrder);
     g_adsb.setApiKey(g_adsbKey.c_str());
     // fonts are baked into the widgets at creation time, so the large-text flag must be
     // in place before display::begin() builds the UI (loadSettings runs first in setup)
@@ -747,6 +750,18 @@ static void handleRoot() {
             srcopts += "<option value='" + String(i) + "'";
             if (g_adsbSrc == i) srcopts += " selected";
             srcopts += ">" + String(kSrc[i]) + "</option>";
+        }
+    }
+    String orderopts;
+    {
+        // Index = AdsbClient::setPublicOrder value. Append new orders as sources are added.
+        static const char *kOrder[] = { "adsb.lol, then airplanes.live",
+                                        "airplanes.live, then adsb.lol" };
+        const int nOrder = sizeof(kOrder) / sizeof(kOrder[0]);
+        for (int i = 0; i < nOrder; ++i) {
+            orderopts += "<option value='" + String(i) + "'";
+            if (g_adsbOrder == i) orderopts += " selected";
+            orderopts += ">" + String(kOrder[i]) + "</option>";
         }
     }
     String tmopts;
@@ -1019,6 +1034,8 @@ static void handleRoot() {
         "<input value='%s' placeholder='192.168.1.50 or myreceiver.local' onchange='lf(this.value)'>"
         "<label>Source</label>"
         "<select onchange='ls(this.value)'>%s</select>"
+        "<label>Internet source order</label>"
+        "<select onchange='lo(this.value)'>%s</select>"
         "<div style='font-size:12px;opacity:.6;margin-top:6px'>Point this at your own "
         "dump1090 / readsb / tar1090 receiver &mdash; a PiAware or ADSB Exchange feeder "
         "works as-is (they are usually reachable as <b>adsbexchange.local</b> or "
@@ -1147,6 +1164,7 @@ static void handleRoot() {
         "function ak(v){fetch('/ais?key='+encodeURIComponent(v)+'&save=1')}"
         "function lf(v){fetch('/adsblocal?h='+encodeURIComponent(v))}"
         "function ls(v){fetch('/adsblocal?m='+v)}"
+        "function lo(v){fetch('/adsblocal?o='+v)}"
         "function kk(v){fetch('/adsblocal?key='+encodeURIComponent(v)).then(()=>location.reload())}"
         "function mb(c){fetch('/map?v='+(c?1:0)+'&save=1')}"
 #if BOARD_HAS_SD
@@ -1197,7 +1215,7 @@ static void handleRoot() {
         sndStatus,
         tmopts.c_str(), g_aisKey.c_str(),
         adsbKeyHint.c_str(),
-        g_adsbLocal.c_str(), srcopts.c_str(),
+        g_adsbLocal.c_str(), srcopts.c_str(), orderopts.c_str(),
         qopts.c_str(), g_qhStart / 60, g_qhStart % 60, g_qhEnd / 60, g_qhEnd % 60,
         updater_auto_check() ? "checked" : "", updater_auto_install() ? "checked" : "",
         g_settings.homeLat, g_settings.homeLon, (g_tz == TZ_STR ? 0 : 1));
@@ -1562,6 +1580,16 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         p.putString("adsblocal", g_adsbLocal);
         p.end();
         ADSB_LOG("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
+    }
+    if (g_web.hasArg("o")) {                      // internet feed order
+        g_adsbOrder = constrain((int)g_web.arg("o").toInt(), 0, 1);
+        g_adsb.setPublicOrder(g_adsbOrder);
+        Preferences p;
+        p.begin("capsuleradar", false);
+        p.putInt("adsborder", g_adsbOrder);
+        p.end();
+        ADSB_LOG("[adsb] internet source order: %s first\n",
+                 g_adsbOrder == 1 ? "airplanes.live" : "adsb.lol re-api");
     }
     if (g_web.hasArg("key")) {                    // adsb.lol API key (empty = remove)
         g_adsbKey = g_web.arg("key");

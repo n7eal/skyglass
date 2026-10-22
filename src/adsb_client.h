@@ -48,6 +48,14 @@ public:
     // then only answers when the request comes from a network that feeds adsb.lol).
     void setApiKey(const char* k) { _apiKey = k ? k : ""; _apiKey.trim(); _reapiBackoff = false; }
     bool hasApiKey() const { return _apiKey.length() > 0; }
+
+    // Order of the internet feeds (config page "Internet source order").
+    //   0 = re-api.adsb.lol, then airplanes.live   (default)
+    //   1 = airplanes.live, then re-api.adsb.lol
+    // Each feed keeps its own limits whatever its position: re-api is still gated to
+    // ADSB_REAPI_MIN_INTERVAL_MS. Add new orders here as more sources arrive.
+    void setPublicOrder(int o) { _publicOrder = o; }
+    int  publicOrder() const { return _publicOrder; }
     bool lastPollWasLocal() const { return _lastWasLocal; }
     // Host that supplied the last successful poll (for the serial log).
     const char* lastSource() const { return _lastSource; }
@@ -81,6 +89,7 @@ private:
     const char* _lastHost = nullptr;
     String _localHost;
     String _apiKey;
+    int    _publicOrder = 0;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;
     const char* _lastSource = "";
