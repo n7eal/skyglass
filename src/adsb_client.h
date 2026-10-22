@@ -1,6 +1,6 @@
 #pragma once
-// Fetches nearby aircraft from adsb.lol's re-api (fallbacks: api.adsb.lol, then
-// airplanes.live) and parses
+// Fetches nearby aircraft from adsb.lol's re-api (fallbacks: airplanes.live, then
+// api.adsb.lol) and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>
@@ -46,7 +46,7 @@ public:
 
 private:
     // How a host is queried.
-    //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (api.adsb.lol, airplanes.live)
+    //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (airplanes.live, api.adsb.lol)
     //   ReApi -- HTTPS /?circle={lat},{lon},{nm}         (re-api.adsb.lol)
     //   Local -- plain HTTP aircraft.json on your own LAN receiver
     enum class FeedKind { Point, ReApi, Local };
