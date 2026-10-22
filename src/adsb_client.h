@@ -9,6 +9,16 @@
 #include "aircraft.h"
 #include "config.h"
 
+// Feed log lines. On the P4 the Serial log never reaches the USB port, so mirror them
+// through the ROM printf (the path the RESTART banners already use) -- otherwise a
+// failing feed on that board is invisible.
+#if defined(BOARD_WAVESHARE_P4_LCD_4C)
+#  include <esp_rom_sys.h>
+#  define ADSB_LOG(...) do { Serial.printf(__VA_ARGS__); esp_rom_printf(__VA_ARGS__); } while (0)
+#else
+#  define ADSB_LOG(...) Serial.printf(__VA_ARGS__)
+#endif
+
 class AdsbClient {
 public:
     // What the feed is actually being asked for. Exposed because the displayed centre and

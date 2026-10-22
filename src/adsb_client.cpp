@@ -101,7 +101,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         if (_backoff[i] && nowMs - _backoffStart[i] >= ADSB_HOST_BACKOFF_MS) _backoff[i] = false;
         if (_backoff[i]) continue;                      // this host said 429; give it its minute
         if (!budgetAvailable(nowMs)) {
-            Serial.printf("[adsb] request budget spent (%d/min); skipping %s\n",
+            ADSB_LOG("[adsb] request budget spent (%d/min); skipping %s\n",
                           ADSB_MAX_REQ_PER_MIN, hosts[i]);
             break;                                      // no budget for any host this poll
         }
@@ -113,7 +113,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         if (!ok && _lastHttpCode == 429) {
             _backoff[i] = true;
             _backoffStart[i] = nowMs;
-            Serial.printf("[adsb] %s rate-limited us (HTTP 429); pausing it for %us\n",
+            ADSB_LOG("[adsb] %s rate-limited us (HTTP 429); pausing it for %us\n",
                           hosts[i], (unsigned)(ADSB_HOST_BACKOFF_MS / 1000));
         }
         if (ok && !list.empty()) {
@@ -173,7 +173,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     }
 
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
-        Serial.printf("[adsb] begin failed (%s)\n", host);
+        ADSB_LOG("[adsb] begin failed (%s)\n", host);
         if (local) _plain.stop(); else _client.stop();
         return false;
     }
@@ -185,7 +185,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));
-        Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
+        ADSB_LOG("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
                       code, host, tlsCode, tls,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -212,7 +212,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     DeserializationError err = deserializeJson(doc, jsonStream,
                                                DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
+        ADSB_LOG("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
                       host, err.c_str(), expectedBytes, (unsigned)jsonStream.bytesRead(),
                       responseStream.available(), responseStream.connected());
         _http.end();
