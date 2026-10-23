@@ -1679,7 +1679,7 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     const uint32_t now = lv_tick_get();              // measure actual cadence for the glide clock
     s_pollMs = (s_lastUpdateMs && now > s_lastUpdateMs) ? (now - s_lastUpdateMs) : (uint32_t)POLL_INTERVAL_MS;
     if (s_pollMs < 400)  s_pollMs = 400;
-    if (s_pollMs > 8000) s_pollMs = 8000;
+    if (s_pollMs > 12000) s_pollMs = 12000;   // >= the slowest normal poll (re-api, 10.5 s), or glides stop short and pause
     s_lastUpdateMs = now;
     s_animStartMs  = now;
 

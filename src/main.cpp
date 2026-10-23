@@ -324,11 +324,16 @@ static void adsb_task(void*) {
             // can block this single network task, so it must never get ahead of the feed.
             const uint32_t nowMs = millis();
             uint32_t pollInterval = g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS;
-            // The public feeds are rate-limited (re-api: 10/min), so only a local receiver
-            // that is answering keeps the fast cadence. AdsbClient also hard-gates re-api,
-            // so an early poll (zoom re-query) falls through to the fallbacks instead.
-            if (!g_adsb.lastPollWasLocal() && pollInterval < ADSB_REAPI_MIN_INTERVAL_MS)
-                pollInterval = ADSB_REAPI_MIN_INTERVAL_MS;
+            // The public feeds are rate-limited, so only a local receiver that is answering
+            // keeps the fast cadence. AdsbClient also hard-gates re-api, so an early poll
+            // (zoom re-query) falls through to the other feed instead.
+            // re-api first: poll a little slower than its gate (the gate's clock starts a
+            // few ms after this one), so re-api is due every time rather than skipped and
+            // quietly replaced by the other feed. airplanes.live first: its faster cadence.
+            const uint32_t publicMin = (g_adsb.publicOrder() == 0) ? ADSB_REAPI_MIN_INTERVAL_MS + 250
+                                                                    : ADSB_PUBLIC_POLL_MS;
+            if (!g_adsb.lastPollWasLocal() && pollInterval < publicMin)
+                pollInterval = publicMin;
             if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
                 lastPoll = nowMs;
                 static int failCount = 0;
