@@ -29,22 +29,34 @@ static PsramJsonAllocator s_jsonPsram;
 // which makes ArduinoJson intermittently report IncompleteInput. Deliberately wrap
 // the client without overriding readBytes(): Stream's timed byte reader retries
 // temporary no-data reads until the configured timeout.
+//
+// It also enforces an overall deadline: once it passes, reads report "no data", the
+// parse fails with IncompleteInput, and the poll moves on to the next feed instead of
+// waiting out a server that is sending its reply a trickle at a time.
 class ReliableJsonStream : public Stream {
 public:
-    explicit ReliableJsonStream(Stream& source) : _source(source) {}
-    int available() override { return _source.available(); }
+    ReliableJsonStream(Stream& source, uint32_t deadlineMs) : _source(source), _deadline(deadlineMs) {}
+    int available() override { return expiredNow() ? 0 : _source.available(); }
     int read() override {
+        if (expiredNow()) return -1;
         const int value = _source.read();
         if (value >= 0) ++_bytesRead;
         return value;
     }
-    int peek() override { return _source.peek(); }
+    int peek() override { return expiredNow() ? -1 : _source.peek(); }
+    bool expired() const { return _expired; }
     void flush() override { _source.flush(); }
     size_t write(uint8_t) override { return 0; }
     size_t bytesRead() const { return _bytesRead; }
 
 private:
+    bool expiredNow() {
+        if (!_expired && (int32_t)(millis() - _deadline) >= 0) _expired = true;
+        return _expired;
+    }
     Stream& _source;
+    uint32_t _deadline;
+    bool _expired = false;
     size_t _bytesRead = 0;
 };
 
@@ -95,7 +107,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     // open. The gate lives here rather than in the caller so that nothing -- a zoom
     // re-query, a failed local poll, a retry -- can push it past 10 requests/minute.
     const uint32_t nowMs = millis();
-    if (_reapiBackoff && nowMs - _reapiBackoffStart >= ADSB_REAPI_BACKOFF_MS)
+    if (_reapiBackoff && nowMs - _reapiBackoffStart >= _reapiBackoffDur)
         _reapiBackoff = false;
     const bool reapiDue = !_reapiBackoff &&
                           (!_reapiArmed || nowMs - _reapiLastMs >= ADSB_REAPI_MIN_INTERVAL_MS);
@@ -136,12 +148,23 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             (_lastHttpCode == 429 || _lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
+            _reapiBackoffDur = ADSB_REAPI_BACKOFF_MS;
             ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; using the other feed for %us\n",
                           ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
                           _lastHttpCode == 429 ? "" :
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
                                            : " -- no API key set, and this network is not a known feeder",
                           (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
+        } else if (srcs[i].kind == FeedKind::ReApi && !ok) {
+            // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS.
+            // These come in runs, and each one costs a timeout before the other feed is
+            // tried -- so give re-api a short rest rather than paying that every poll.
+            _reapiBackoff = true;
+            _reapiBackoffStart = nowMs;
+            _reapiBackoffDur = ADSB_REAPI_SLOW_BACKOFF_MS;
+            ADSB_LOG("[adsb] %s %s after %u ms; using the other feed for %us\n",
+                     ADSB_REAPI_HOST, _lastTooSlow ? "too slow" : "failed",
+                     (unsigned)_lastFetchMs, (unsigned)(ADSB_REAPI_SLOW_BACKOFF_MS / 1000));
         }
 
         if (ok && !list.empty()) {
@@ -169,6 +192,13 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
 bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind) {
     const bool local = (kind == FeedKind::Local);
     _lastHttpCode = 0;
+    _lastTooSlow = false;
+    const uint32_t t0 = millis();
+    // Record the duration on every return path.
+    struct FetchTimer {
+        uint32_t &dst; uint32_t t0;
+        ~FetchTimer() { dst = millis() - t0; }
+    } fetchTimer{ _lastFetchMs, t0 };
     char url[192];
     if (local) {
         // tar1090/readsb serve the whole picture the receiver hears -- there is no radius
@@ -194,6 +224,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
         _lastHost = host;
     }
 
+    if (!local) _client.setHandshakeTimeout(ADSB_TLS_HANDSHAKE_S);   // default is 120 s
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
         ADSB_LOG("[adsb] begin failed (%s)\n", host);
         if (local) _plain.stop(); else _client.stop();
@@ -209,8 +240,8 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));
-        ADSB_LOG("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
-                      code, host, tlsCode, tls,
+        ADSB_LOG("[adsb] HTTP %d (%s) after %u ms, tls=%d '%s' heap=%u largest=%u psram=%u\n",
+                      code, host, (unsigned)(millis() - t0), tlsCode, tls,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
@@ -233,9 +264,17 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     JsonDocument doc(&s_jsonPsram);
     const int expectedBytes = _http.getSize();
     NetworkClient& responseStream = _http.getStream();
-    ReliableJsonStream jsonStream(responseStream);
+    ReliableJsonStream jsonStream(responseStream, t0 + ADSB_FETCH_DEADLINE_MS);
     DeserializationError err = deserializeJson(doc, jsonStream,
                                                DeserializationOption::Filter(filter));
+    if (err && jsonStream.expired()) {
+        _lastTooSlow = true;
+        ADSB_LOG("[adsb] %s too slow: gave up after %u ms with %u of %d bytes\n",
+                 host, (unsigned)(millis() - t0), (unsigned)jsonStream.bytesRead(), expectedBytes);
+        _http.end();
+        _client.stop();
+        return false;
+    }
     if (err) {
         ADSB_LOG("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
                       host, err.c_str(), expectedBytes, (unsigned)jsonStream.bytesRead(),

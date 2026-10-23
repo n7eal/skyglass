@@ -68,6 +68,12 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_REAPI_HOST            "re-api.adsb.lol"
 #define ADSB_REAPI_MIN_INTERVAL_MS 6700     // 60000 / 6700 = 8.96 -> at most 9 requests/min
 #define ADSB_REAPI_BACKOFF_MS      60000    // after HTTP 429/403, leave re-api alone this long
+#define ADSB_REAPI_SLOW_BACKOFF_MS 20000    // after a re-api timeout / connection error / overrun
+// Hard cap on one feed request, connect + TLS + download + parse. A server that trickles
+// its reply never trips the per-read timeout, and the TLS handshake's own default is 120 s,
+// so without this one slow answer held the scope frozen for 30-40 s at a time.
+#define ADSB_FETCH_DEADLINE_MS     9000
+#define ADSB_TLS_HANDSHAKE_S       6        // NetworkClientSecure default is 120 s
 // airplanes.live: the fallback by default, or the first feed when the config page sets
 // "Internet source order" to airplanes.live first. GET /v2/point/{lat}/{lon}/{radius_nm}. (api.adsb.lol, the
 // public v2 API, was removed: deprecated.)

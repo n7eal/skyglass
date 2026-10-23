@@ -337,9 +337,9 @@ static void adsb_task(void*) {
                 if (g_adsb.poll(fresh)) {
                     {
                         const bool viaReapi = strcmp(g_adsb.lastSource(), ADSB_REAPI_HOST) == 0;
-                        ADSB_LOG("[adsb] fetched %u aircraft (%s%s%s)\n", (unsigned)fresh.size(),
+                        ADSB_LOG("[adsb] fetched %u aircraft (%s%s%s) in %u ms\n", (unsigned)fresh.size(),
                                  g_adsb.lastSource(), viaReapi ? ", " : "",
-                                 viaReapi ? g_adsb.apiKeyDesc() : "");
+                                 viaReapi ? g_adsb.apiKeyDesc() : "", (unsigned)g_adsb.lastFetchMs());
                     }
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
