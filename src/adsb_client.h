@@ -69,6 +69,8 @@ public:
     uint32_t lastOkMs() const { return _lastOkMs; }
     // How long the most recent single-host request took, in ms (for the log).
     uint32_t lastFetchMs() const { return _lastFetchMs; }
+    // Server address the last re-api request resolved to ("?" if unknown), for the log.
+    const char* lastReapiIp() const { return _reapiIp; }
 
 private:
     // How a host is queried.
@@ -108,4 +110,5 @@ private:
     uint32_t _reapiBackoffDur = 0;       // how long this backoff lasts
     uint32_t _lastFetchMs = 0;
     bool     _lastTooSlow = false;       // the last request hit ADSB_FETCH_DEADLINE_MS
+    char     _reapiIp[16] = "?";
 };

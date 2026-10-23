@@ -162,8 +162,8 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
             _reapiBackoffDur = ADSB_REAPI_SLOW_BACKOFF_MS;
-            ADSB_LOG("[adsb] %s %s after %u ms; using the other feed for %us\n",
-                     ADSB_REAPI_HOST, _lastTooSlow ? "too slow" : "failed",
+            ADSB_LOG("[adsb] %s (%s) %s after %u ms; using the other feed for %us\n",
+                     ADSB_REAPI_HOST, _reapiIp, _lastTooSlow ? "too slow" : "failed",
                      (unsigned)_lastFetchMs, (unsigned)(ADSB_REAPI_SLOW_BACKOFF_MS / 1000));
         }
 
@@ -225,6 +225,15 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
 
     if (!local) _client.setHandshakeTimeout(ADSB_TLS_HANDSHAKE_S);   // default is 120 s
+    if (kind == FeedKind::ReApi) {
+        // Diagnostic: which server address this request goes to. re-api failures come in
+        // minute-long runs that look like one of several DNS addresses being unreachable;
+        // logging the address on each line shows whether failures follow one IP. lwIP
+        // caches the answer, so this is the same address the request below connects to.
+        IPAddress ip;
+        if (WiFi.hostByName(host, ip) == 1) snprintf(_reapiIp, sizeof(_reapiIp), "%s", ip.toString().c_str());
+        else                                 snprintf(_reapiIp, sizeof(_reapiIp), "DNS-fail");
+    }
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
         ADSB_LOG("[adsb] begin failed (%s)\n", host);
         if (local) _plain.stop(); else _client.stop();
@@ -245,7 +254,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
-        if (kind == FeedKind::ReApi) ADSB_LOG("[adsb]   that re-api request was sent with %s\n", _keyDesc);
+        if (kind == FeedKind::ReApi) ADSB_LOG("[adsb]   that re-api request went to %s, sent with %s\n", _reapiIp, _keyDesc);
         _http.end();
         _client.stop();
         return false;
