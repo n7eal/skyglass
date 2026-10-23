@@ -81,6 +81,12 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // so without this one slow answer held the scope frozen for 30-40 s at a time.
 #define ADSB_FETCH_DEADLINE_MS     9000
 #define ADSB_TLS_HANDSHAKE_S       6        // NetworkClientSecure default is 120 s
+// re-api.adsb.lol is several servers behind one name, and some of them can be unreachable
+// from a given network (seen: 2 of 4 timing out). lwIP's resolver only ever returns one
+// address and keeps it, which turned one dead server into minute-long runs of failures.
+// AdsbClient fetches all of them itself, sticks to one that answers, and skips a dead one.
+#define ADSB_REAPI_IP_BAD_MS       600000   // skip a server that did not answer for 10 min
+#define ADSB_REAPI_IP_REFRESH_MS   600000   // re-read the server list every 10 min
 // airplanes.live: the fallback by default, or the first feed when the config page sets
 // "Internet source order" to airplanes.live first. GET /v2/point/{lat}/{lon}/{radius_nm}. (api.adsb.lol, the
 // public v2 API, was removed: deprecated.)

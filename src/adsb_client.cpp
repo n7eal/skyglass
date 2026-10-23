@@ -14,6 +14,74 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>   // v7
 #include <esp_heap_caps.h>
+#include <WiFiUdp.h>
+#include <esp_random.h>
+
+// Minimal DNS A-record lookup, straight to the network's DNS server. lwIP's own resolver
+// returns a single address (and caches it), so it cannot tell us about the other servers
+// behind a name. Returns the number of IPv4 addresses written to `out`, or -1.
+static int dns_query_a(const char *name, const IPAddress &server, uint32_t *out, int max) {
+    uint8_t q[300];
+    size_t n = 0;
+    const uint16_t id = (uint16_t)esp_random();
+    q[n++] = id >> 8; q[n++] = id & 0xFF;
+    q[n++] = 0x01; q[n++] = 0x00;                  // standard query, recursion desired
+    q[n++] = 0; q[n++] = 1;                        // one question
+    memset(q + n, 0, 6); n += 6;                   // no answer/authority/additional
+    for (const char *p = name; *p;) {
+        const char *dot = strchr(p, '.');
+        const size_t len = dot ? (size_t)(dot - p) : strlen(p);
+        if (len == 0 || len > 63 || n + len + 6 > sizeof(q)) return -1;
+        q[n++] = (uint8_t)len;
+        memcpy(q + n, p, len); n += len;
+        p += len;
+        if (*p == '.') ++p;
+    }
+    q[n++] = 0;
+    q[n++] = 0; q[n++] = 1;                        // QTYPE  A
+    q[n++] = 0; q[n++] = 1;                        // QCLASS IN
+
+    WiFiUDP udp;
+    if (!udp.begin(0)) return -1;
+    if (!udp.beginPacket(server, 53)) { udp.stop(); return -1; }
+    udp.write(q, n);
+    if (!udp.endPacket()) { udp.stop(); return -1; }
+    uint8_t r[512];
+    int len = 0;
+    const uint32_t t0 = millis();
+    while (millis() - t0 < 1500) {
+        if (udp.parsePacket() > 0) { len = udp.read(r, sizeof(r)); break; }
+        delay(10);
+    }
+    udp.stop();
+    if (len < 12 || r[0] != q[0] || r[1] != q[1] || (r[3] & 0x0F) != 0) return -1;
+
+    const int qd = (r[4] << 8) | r[5];
+    const int an = (r[6] << 8) | r[7];
+    int i = 12;
+    auto skipName = [&](int &at) -> bool {
+        while (at < len) {
+            const uint8_t b = r[at];
+            if (b == 0) { ++at; return true; }
+            if ((b & 0xC0) == 0xC0) { at += 2; return true; }   // compression pointer
+            at += b + 1;
+        }
+        return false;
+    };
+    for (int k = 0; k < qd; ++k) { if (!skipName(i)) return -1; i += 4; }
+    int cnt = 0;
+    for (int k = 0; k < an && i < len; ++k) {
+        if (!skipName(i) || i + 10 > len) break;
+        const uint16_t type = (r[i] << 8) | r[i + 1];
+        const uint16_t rdl  = (r[i + 8] << 8) | r[i + 9];
+        i += 10;
+        if (i + rdl > len) break;
+        if (type == 1 && rdl == 4 && cnt < max)
+            out[cnt++] = (uint32_t)IPAddress(r[i], r[i + 1], r[i + 2], r[i + 3]);
+        i += rdl;
+    }
+    return cnt;
+}
 
 // Parse the JSON in PSRAM, not internal RAM. Otherwise the per-poll JSON alloc/free
 // churn fragments the internal heap and, after a while, mbedTLS can't find a large
@@ -155,7 +223,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
                                            : " -- no API key set, and this network is not a known feeder",
                           (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
-        } else if (srcs[i].kind == FeedKind::ReApi && !ok) {
+        } else if (srcs[i].kind == FeedKind::ReApi && !ok && !reapiHasGoodIp(nowMs)) {
             // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS.
             // These come in runs, and each one costs a timeout before the other feed is
             // tried -- so give re-api a short rest rather than paying that every poll.
@@ -187,6 +255,73 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         return true;
     }
     return false;
+}
+
+void AdsbClient::refreshReapiIps(uint32_t now) {
+    if (_reapiNIps && now - _reapiIpsAt < ADSB_REAPI_IP_REFRESH_MS) return;
+    _reapiIpsAt = now;
+    uint32_t ips[kReapiMaxIps];
+    int n = -1;
+    const IPAddress dns = WiFi.dnsIP(0);
+    if ((uint32_t)dns != 0) n = dns_query_a(ADSB_REAPI_HOST, dns, ips, kReapiMaxIps);
+    if (n <= 0) {                                   // fall back to the system resolver
+        IPAddress ip;
+        if (WiFi.hostByName(ADSB_REAPI_HOST, ip) == 1) { ips[0] = (uint32_t)ip; n = 1; }
+    }
+    if (n <= 0) return;                             // keep whatever list we had
+
+    // Carry "bad" marks over for servers still in the new list.
+    bool bad[kReapiMaxIps] = {};
+    uint32_t since[kReapiMaxIps] = {};
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < _reapiNIps; ++j)
+            if (ips[i] == _reapiIps[j]) { bad[i] = _reapiBad[j]; since[i] = _reapiBadSince[j]; }
+    const bool changed = (n != _reapiNIps) || memcmp(ips, _reapiIps, n * sizeof(uint32_t)) != 0;
+    memcpy(_reapiIps, ips, n * sizeof(uint32_t));
+    memcpy(_reapiBad, bad, sizeof(bad));
+    memcpy(_reapiBadSince, since, sizeof(since));
+    _reapiNIps = n;
+    if (_reapiCur >= n) _reapiCur = 0;
+    if (changed) {
+        char list[8 * 17] = "";
+        for (int i = 0; i < n; ++i) {
+            strncat(list, " ", sizeof(list) - strlen(list) - 1);
+            strncat(list, IPAddress(_reapiIps[i]).toString().c_str(), sizeof(list) - strlen(list) - 1);
+        }
+        ADSB_LOG("[adsb] %s servers:%s\n", ADSB_REAPI_HOST, list);
+    }
+}
+
+// Prefer the server that last worked; skip any marked bad until their time is up.
+int AdsbClient::pickReapiIp(uint32_t now) {
+    if (!_reapiNIps) return -1;
+    for (int k = 0; k < _reapiNIps; ++k) {
+        const int i = (_reapiCur + k) % _reapiNIps;
+        if (_reapiBad[i] && now - _reapiBadSince[i] >= ADSB_REAPI_IP_BAD_MS) _reapiBad[i] = false;
+        if (!_reapiBad[i]) { _reapiCur = i; return i; }
+    }
+    // Every server is marked bad: give the next one another chance rather than none.
+    _reapiCur = (_reapiCur + 1) % _reapiNIps;
+    _reapiBad[_reapiCur] = false;
+    return _reapiCur;
+}
+
+bool AdsbClient::reapiHasGoodIp(uint32_t now) const {
+    for (int i = 0; i < _reapiNIps; ++i)
+        if (!_reapiBad[i] || now - _reapiBadSince[i] >= ADSB_REAPI_IP_BAD_MS) return true;
+    return false;
+}
+
+void AdsbClient::markReapiIp(bool ok) {
+    const int i = _reapiCurIdx;
+    _reapiCurIdx = -1;
+    if (i < 0 || i >= _reapiNIps) return;
+    if (ok) { _reapiBad[i] = false; return; }
+    _reapiBad[i] = true;
+    _reapiBadSince[i] = millis();
+    _reapiCur = (i + 1) % _reapiNIps;              // next request goes elsewhere
+    ADSB_LOG("[adsb] re-api server %s not answering; skipping it for %u min\n",
+             _reapiIp, (unsigned)(ADSB_REAPI_IP_BAD_MS / 60000));
 }
 
 bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind) {
@@ -225,14 +360,31 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
 
     if (!local) _client.setHandshakeTimeout(ADSB_TLS_HANDSHAKE_S);   // default is 120 s
+    _reapiCurIdx = -1;
     if (kind == FeedKind::ReApi) {
-        // Diagnostic: which server address this request goes to. re-api failures come in
-        // minute-long runs that look like one of several DNS addresses being unreachable;
-        // logging the address on each line shows whether failures follow one IP. lwIP
-        // caches the answer, so this is the same address the request below connects to.
-        IPAddress ip;
-        if (WiFi.hostByName(host, ip) == 1) snprintf(_reapiIp, sizeof(_reapiIp), "%s", ip.toString().c_str());
-        else                                 snprintf(_reapiIp, sizeof(_reapiIp), "DNS-fail");
+        // Connect to a specific re-api server ourselves (TLS still uses the host name for
+        // SNI), so a dead one can be skipped. HTTPClient sees the open connection and
+        // reuses it (setReuse(true) above) instead of resolving the name again.
+        const uint32_t now = millis();
+        refreshReapiIps(now);
+        const int idx = pickReapiIp(now);
+        if (idx >= 0) {
+            const IPAddress ip(_reapiIps[idx]);
+            snprintf(_reapiIp, sizeof(_reapiIp), "%s", ip.toString().c_str());
+            _reapiCurIdx = idx;
+            _client.stop();
+            _client.setConnectionTimeout(6000);
+            if (!_client.connect(ip, 443, host, nullptr, nullptr, nullptr)) {
+                _lastHttpCode = -1;
+                ADSB_LOG("[adsb] could not connect to re-api server %s after %u ms\n",
+                         _reapiIp, (unsigned)(millis() - t0));
+                markReapiIp(false);
+                _client.stop();
+                return false;
+            }
+        } else {
+            snprintf(_reapiIp, sizeof(_reapiIp), "DNS-fail");   // fall back to connect-by-name
+        }
     }
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
         ADSB_LOG("[adsb] begin failed (%s)\n", host);
@@ -254,7 +406,11 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
-        if (kind == FeedKind::ReApi) ADSB_LOG("[adsb]   that re-api request went to %s, sent with %s\n", _reapiIp, _keyDesc);
+        if (kind == FeedKind::ReApi) {
+            ADSB_LOG("[adsb]   that re-api request went to %s, sent with %s\n", _reapiIp, _keyDesc);
+            if (code < 0) markReapiIp(false);     // transport failure: try another server
+            else          markReapiIp(true);      // the server answered (an HTTP error is not its fault)
+        }
         _http.end();
         _client.stop();
         return false;
@@ -278,6 +434,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                                                DeserializationOption::Filter(filter));
     if (err && jsonStream.expired()) {
         _lastTooSlow = true;
+        if (kind == FeedKind::ReApi) markReapiIp(false);
         ADSB_LOG("[adsb] %s too slow: gave up after %u ms with %u of %d bytes\n",
                  host, (unsigned)(millis() - t0), (unsigned)jsonStream.bytesRead(), expectedBytes);
         _http.end();
@@ -294,6 +451,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
     _http.end();
     _client.stop();
+    if (kind == FeedKind::ReApi) markReapiIp(true);
 
     JsonArrayConst arr = doc["ac"].as<JsonArrayConst>();
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();

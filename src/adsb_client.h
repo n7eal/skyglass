@@ -111,4 +111,18 @@ private:
     uint32_t _lastFetchMs = 0;
     bool     _lastTooSlow = false;       // the last request hit ADSB_FETCH_DEADLINE_MS
     char     _reapiIp[16] = "?";
+
+    // re-api server pool: every IPv4 address behind ADSB_REAPI_HOST.
+    static const int kReapiMaxIps = 8;
+    uint32_t _reapiIps[kReapiMaxIps] = {};
+    bool     _reapiBad[kReapiMaxIps] = {};
+    uint32_t _reapiBadSince[kReapiMaxIps] = {};
+    int      _reapiNIps = 0;
+    int      _reapiCur = 0;              // server currently preferred
+    int      _reapiCurIdx = -1;          // server used by the request in flight (-1 = by name)
+    uint32_t _reapiIpsAt = 0;
+    void refreshReapiIps(uint32_t now);
+    int  pickReapiIp(uint32_t now);
+    void markReapiIp(bool ok);
+    bool reapiHasGoodIp(uint32_t now) const;
 };
