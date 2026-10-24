@@ -66,11 +66,9 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // x-api-key header), from anywhere. Rate limit is 10 requests/minute, so it is hard-gated in AdsbClient::poll
 // to one request per ADSB_REAPI_MIN_INTERVAL_MS -- every attempt counts, failures included.
 #define ADSB_REAPI_HOST            "re-api.adsb.lol"
-// The documented limit is 10/min, but in practice re-api accepts about 6 per rolling
-// minute: past that it refuses the TCP/TLS connection itself (never reaching its request
-// log), and each refusal costs a 6 s connect timeout -- the scope visibly stalls. Seen in
-// the adsb.lol portal as never more than 6 successful requests in any 60 s window.
-#define ADSB_REAPI_MIN_INTERVAL_MS 10500    // 60000 / 10500 = 5.7 requests/min
+// The re-api limit is 10/min. (An earlier cap of ~6/min was a misdiagnosis: the refused
+// connections were dead servers behind the name, now skipped by the server failover.)
+#define ADSB_REAPI_MIN_INTERVAL_MS 6700     // 60000 / 6700 = 8.96 -> at most 9 requests/min
 // Poll cadence when re-api is not the first feed (airplanes.live first, or a local receiver
 // falling back). airplanes.live allows far more than this.
 #define ADSB_PUBLIC_POLL_MS        6700
@@ -112,7 +110,7 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_MAX_AIRCRAFT   120             // hard cap parsed per poll (protect RAM in busy areas)
 // When the primary feed answers cleanly but with zero aircraft, re-probe the fallback
 // only every Nth poll. An empty sky is normal and can last hours; see AdsbClient::poll.
-#define ADSB_EMPTY_RECHECK_POLLS 6          // 6 polls = ~1 min while empty
+#define ADSB_EMPTY_RECHECK_POLLS 9          // 9 polls = ~1 min while empty
 
 // ---------- Self-update (GitHub Pages, published by the web-flasher workflow) ----------
 // The workflow stamps manifest.json with FW_VERSION and publishes firmware.bin beside

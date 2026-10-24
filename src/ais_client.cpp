@@ -17,15 +17,9 @@
 #include <math.h>
 #include <string.h>
 
-// On the P4 the Serial log never reaches the USB port; mirror [ais] lines through the ROM
-// printf (same as ADSB_LOG). The ROM printf has no float formatting -- keep these to
-// %d / %u / %s.
-#if defined(BOARD_WAVESHARE_P4_LCD_4C)
-#  include <esp_rom_sys.h>
-#  define AIS_LOG(...) do { Serial.printf(__VA_ARGS__); esp_rom_printf(__VA_ARGS__); } while (0)
-#else
-#  define AIS_LOG(...) Serial.printf(__VA_ARGS__)
-#endif
+// [ais] lines: Serial, (P4) the USB console, and the /log web page. See sg_log.h.
+#include "sg_log.h"
+#define AIS_LOG(...) sg_log(__VA_ARGS__)
 
 // Diagnostics: how much the stream is actually delivering.
 static uint32_t s_msgs = 0;         // JSON frames (text or binary) received since connecting

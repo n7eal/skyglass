@@ -15,14 +15,9 @@
 #include <Arduino.h>
 #include <TinyGPS++.h>
 
-// On the P4 the Serial log never reaches the USB port; mirror the [gps] lines through the
-// ROM printf so the wiring diagnostics below are visible there (same as ADSB_LOG).
-#if defined(BOARD_WAVESHARE_P4_LCD_4C)
-#  include <esp_rom_sys.h>
-#  define GPS_LOG(...) do { Serial.printf(__VA_ARGS__); esp_rom_printf(__VA_ARGS__); } while (0)
-#else
-#  define GPS_LOG(...) Serial.printf(__VA_ARGS__)
-#endif
+// [gps] lines: Serial, (P4) the USB console, and the /log web page. See sg_log.h.
+#include "sg_log.h"
+#define GPS_LOG(...) sg_log(__VA_ARGS__)
 
 // ---------------------------------------------------------------------------------
 // Two backends behind one API. A board defines PIN_GPS_RX when it has a plain NMEA

@@ -2260,6 +2260,15 @@ void setup() {
     g_web.on("/sounddel", HTTP_POST, handleSoundDelete);
     // Health snapshot. Exists because the interesting numbers (contiguous internal heap,
     // PSRAM headroom) previously only reached serial, which needs a cable attached.
+    // Recent [adsb]/[gps]/[ais] lines as plain text: the log without a USB cable.
+    g_web.on("/log", []() {
+        static char *buf = (char *)heap_caps_malloc(SG_LOG_RING_BYTES + 1, MALLOC_CAP_SPIRAM);
+        if (!buf) buf = (char *)malloc(SG_LOG_RING_BYTES + 1);
+        if (!buf) { g_web.send(500, "text/plain", "no memory for the log copy"); return; }
+        sg_log_copy(buf, SG_LOG_RING_BYTES + 1);
+        g_web.sendHeader("Cache-Control", "no-store");
+        g_web.send(200, "text/plain; charset=utf-8", buf);
+    });
     g_web.on("/diag", []() {
         // Painted pixels in the fetched tile vs painted pixels that survived the crop and
         // the circular mask. "No weather" and "the decode produced nothing" look identical
@@ -2511,10 +2520,7 @@ void loop() {
                 // adsb_task would re-begin with a stale/zero g_requeryKm and fetch 0 aircraft.
                 g_requeryKm = queryRadiusKm();
                 g_requery = true;                                       // adsb_task re-queries the new area
-                Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
-#if defined(BOARD_WAVESHARE_P4_LCD_4C)
-                esp_rom_printf("[gps] re-centred to the GPS fix\n");   // ROM printf has no %f
-#endif
+                sg_log("[gps] re-centred to %.4f, %.4f\n", glat, glon);
             }
         }
     }
