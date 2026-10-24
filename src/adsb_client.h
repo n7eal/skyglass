@@ -45,13 +45,16 @@ public:
     const char* apiKeyDesc() const { return _keyDesc; }
     bool hasApiKey() const { return _apiKey.length() > 0; }
 
-    // Order of the internet feeds (config page "Internet source order").
-    //   0 = re-api.adsb.lol, then airplanes.live   (default)
-    //   1 = airplanes.live, then re-api.adsb.lol
-    // Each feed keeps its own limits whatever its position: re-api is still gated to
-    // ADSB_REAPI_MIN_INTERVAL_MS. Add new orders here as more sources arrive.
-    void setPublicOrder(int o) { _publicOrder = o; }
+    // Internet feeds, and the order they are tried in (config page "Internet source order").
+    // Orders 0 and 1 keep their old meaning (adsb.lol / airplanes.live first) with adsb.fi
+    // appended. Each feed keeps its own limits whatever its position: re-api is still
+    // gated to ADSB_REAPI_MIN_INTERVAL_MS, and any feed that answers 429 is held off.
+    enum Source { SRC_REAPI = 0, SRC_AIRPLANES = 1, SRC_ADSBFI = 2, SRC_COUNT = 3 };
+    static int         orderCount();
+    static const char *orderLabel(int order);
+    void setPublicOrder(int o) { _publicOrder = (o >= 0 && o < orderCount()) ? o : 0; }
     int  publicOrder() const { return _publicOrder; }
+    bool reapiFirst() const;                   // decides the poll cadence
     bool lastPollWasLocal() const { return _lastWasLocal; }
     // Host that supplied the last successful poll (for the serial log).
     const char* lastSource() const { return _lastSource; }
@@ -71,7 +74,8 @@ private:
     //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (airplanes.live)
     //   ReApi -- HTTPS /?circle={lat},{lon},{nm}         (re-api.adsb.lol)
     //   Local -- plain HTTP aircraft.json on your own LAN receiver
-    enum class FeedKind { Point, ReApi, Local };
+    //   AdsbFi -- HTTPS /api/v3/lat/{lat}/lon/{lon}/dist/{nm} (opendata.adsb.fi)
+    enum class FeedKind { Point, ReApi, Local, AdsbFi };
 
     // One host, one attempt. Sets _lastHttpCode.
     bool fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind);
@@ -91,6 +95,11 @@ private:
     String _apiKey;
     char   _keyDesc[16] = "no key";
     int    _publicOrder = 0;
+    uint32_t _lastRetryAfterS = 0;       // Retry-After of the last 429 (0 = none sent)
+    // Per-feed hold after HTTP 429, honouring Retry-After.
+    bool     _hold[SRC_COUNT] = {};
+    uint32_t _holdStart[SRC_COUNT] = {};
+    uint32_t _holdDur[SRC_COUNT] = {};
     int    _srcMode = 0;
     bool   _lastWasLocal = false;
     const char* _lastSource = "";

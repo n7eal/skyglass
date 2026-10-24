@@ -89,6 +89,16 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // "Internet source order" to airplanes.live first. GET /v2/point/{lat}/{lon}/{radius_nm}. (api.adsb.lol, the
 // public v2 API, was removed: deprecated.)
 #define ADSB_FALLBACK_HOST  "api.airplanes.live"
+// adsb.fi open data: GET /api/v3/lat/{lat}/lon/{lon}/dist/{nm} (max 250 NM), ADSBx-v2 format
+// ("ac" list). No key; 1 request/s on public endpoints, and 4xx/429 replies count toward
+// it -- "excessive invalid HTTP requests results in a temporary IP address restriction".
+// Terms: personal, non-commercial use; credit adsb.fi with a link (About screen).
+#define ADSB_FI_HOST        "opendata.adsb.fi"
+// HTTP 429 from any feed: hold that feed off for its Retry-After (seconds), or this long if
+// the header is missing, and use the others meanwhile. Clamped so a bogus value cannot
+// silence a feed for hours.
+#define ADSB_429_DEFAULT_S  60
+#define ADSB_429_MAX_S      900
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.

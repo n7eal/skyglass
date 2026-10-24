@@ -330,8 +330,8 @@ static void adsb_task(void*) {
             // re-api first: poll a little slower than its gate (the gate's clock starts a
             // few ms after this one), so re-api is due every time rather than skipped and
             // quietly replaced by the other feed. airplanes.live first: its faster cadence.
-            const uint32_t publicMin = (g_adsb.publicOrder() == 0) ? ADSB_REAPI_MIN_INTERVAL_MS + 250
-                                                                    : ADSB_PUBLIC_POLL_MS;
+            const uint32_t publicMin = g_adsb.reapiFirst() ? ADSB_REAPI_MIN_INTERVAL_MS + 250
+                                                           : ADSB_PUBLIC_POLL_MS;
             if (!g_adsb.lastPollWasLocal() && pollInterval < publicMin)
                 pollInterval = publicMin;
             if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
@@ -788,14 +788,11 @@ static void handleRoot() {
     }
     String orderopts;
     {
-        // Index = AdsbClient::setPublicOrder value. Append new orders as sources are added.
-        static const char *kOrder[] = { "adsb.lol, then airplanes.live",
-                                        "airplanes.live, then adsb.lol" };
-        const int nOrder = sizeof(kOrder) / sizeof(kOrder[0]);
-        for (int i = 0; i < nOrder; ++i) {
+        // Index = AdsbClient::setPublicOrder value; the table lives in adsb_client.cpp.
+        for (int i = 0; i < AdsbClient::orderCount(); ++i) {
             orderopts += "<option value='" + String(i) + "'";
             if (g_adsbOrder == i) orderopts += " selected";
-            orderopts += ">" + String(kOrder[i]) + "</option>";
+            orderopts += ">" + String(AdsbClient::orderLabel(i)) + "</option>";
         }
     }
     String tmopts;
@@ -1617,14 +1614,13 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         ADSB_LOG("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
     }
     if (g_web.hasArg("o")) {                      // internet feed order
-        g_adsbOrder = constrain((int)g_web.arg("o").toInt(), 0, 1);
+        g_adsbOrder = constrain((int)g_web.arg("o").toInt(), 0, AdsbClient::orderCount() - 1);
         g_adsb.setPublicOrder(g_adsbOrder);
         Preferences p;
         p.begin("capsuleradar", false);
         p.putInt("adsborder", g_adsbOrder);
         p.end();
-        ADSB_LOG("[adsb] internet source order: %s first\n",
-                 g_adsbOrder == 1 ? "airplanes.live" : "adsb.lol re-api");
+        ADSB_LOG("[adsb] internet source order: %s\n", AdsbClient::orderLabel(g_adsbOrder));
     }
     if (g_web.hasArg("key")) {                    // adsb.lol API key (empty = remove)
         g_adsbKey = g_web.arg("key");

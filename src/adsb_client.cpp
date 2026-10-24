@@ -128,6 +128,38 @@ private:
     size_t _bytesRead = 0;
 };
 
+// Every ordering of the three feeds. Index = setPublicOrder() value; 0 and 1 match the
+// old two-feed settings so a saved choice keeps its meaning.
+static const uint8_t kOrders[][AdsbClient::SRC_COUNT] = {
+    { AdsbClient::SRC_REAPI,     AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_ADSBFI },
+    { AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_REAPI,     AdsbClient::SRC_ADSBFI },
+    { AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_REAPI,     AdsbClient::SRC_AIRPLANES },
+    { AdsbClient::SRC_REAPI,     AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_AIRPLANES },
+    { AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_REAPI },
+    { AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_REAPI },
+};
+static const char *const kOrderLabels[] = {
+    "adsb.lol, airplanes.live, adsb.fi",
+    "airplanes.live, adsb.lol, adsb.fi",
+    "adsb.fi, adsb.lol, airplanes.live",
+    "adsb.lol, adsb.fi, airplanes.live",
+    "airplanes.live, adsb.fi, adsb.lol",
+    "adsb.fi, airplanes.live, adsb.lol",
+};
+static const char *const kSrcHost[AdsbClient::SRC_COUNT] = { ADSB_REAPI_HOST, ADSB_FALLBACK_HOST, ADSB_FI_HOST };
+
+int AdsbClient::orderCount() { return (int)(sizeof(kOrders) / sizeof(kOrders[0])); }
+const char *AdsbClient::orderLabel(int o) { return (o >= 0 && o < orderCount()) ? kOrderLabels[o] : "?"; }
+bool AdsbClient::reapiFirst() const { return kOrders[_publicOrder][0] == SRC_REAPI; }
+
+// Retry-After is either delay-seconds or an HTTP-date. Only the seconds form is parsed;
+// a date (or anything else) returns 0 and the caller uses ADSB_429_DEFAULT_S.
+static uint32_t parse_retry_after(const String &v) {
+    if (v.length() == 0 || v.length() > 9) return 0;
+    for (size_t i = 0; i < v.length(); ++i) if (!isdigit((unsigned char)v[i])) return 0;
+    return (uint32_t)v.toInt();
+}
+
 void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
     _lat = homeLat; _lon = homeLon; _rangeKm = rangeKm;
 }
@@ -180,15 +212,23 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     const bool reapiDue = !_reapiBackoff &&
                           (!_reapiArmed || nowMs - _reapiLastMs >= ADSB_REAPI_MIN_INTERVAL_MS);
 
-    struct Src { const char* host; FeedKind kind; };
-    Src srcs[2];
+    // Release any 429 holds whose Retry-After has run out.
+    for (int s = 0; s < SRC_COUNT; ++s)
+        if (_hold[s] && nowMs - _holdStart[s] >= _holdDur[s]) {
+            _hold[s] = false;
+            ADSB_LOG("[adsb] %s: Retry-After hold over, using it again\n", kSrcHost[s]);
+        }
+
+    struct Src { const char* host; FeedKind kind; int id; };
+    Src srcs[SRC_COUNT];
     int n = 0;
-    if (_publicOrder == 1) {                     // airplanes.live first
-        srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
-        if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
-    } else {                                     // re-api first (default)
-        if (reapiDue) srcs[n++] = { ADSB_REAPI_HOST, FeedKind::ReApi };
-        srcs[n++] = { ADSB_FALLBACK_HOST, FeedKind::Point };
+    for (int k = 0; k < SRC_COUNT; ++k) {
+        const int s = kOrders[_publicOrder][k];
+        if (_hold[s]) continue;                              // told to wait (429)
+        if (s == SRC_REAPI && !reapiDue) continue;           // rate gate / refusal backoff
+        const FeedKind kind = (s == SRC_REAPI) ? FeedKind::ReApi
+                            : (s == SRC_ADSBFI) ? FeedKind::AdsbFi : FeedKind::Point;
+        srcs[n++] = { kSrcHost[s], kind, s };
     }
 
     // Walk the list until a source returns aircraft.
@@ -212,14 +252,27 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         std::vector<Aircraft> list;
         const bool ok = fetchFrom(srcs[i].host, list, srcs[i].kind);
 
-        if (srcs[i].kind == FeedKind::ReApi && !ok &&
-            (_lastHttpCode == 429 || _lastHttpCode == 403 || _lastHttpCode == 401)) {
+        if (!ok && _lastHttpCode == 429) {
+            // Rate limited: wait exactly as long as the feed asks, then use it again.
+            uint32_t sec = _lastRetryAfterS ? _lastRetryAfterS : ADSB_429_DEFAULT_S;
+            if (sec < 1) sec = 1;
+            if (sec > ADSB_429_MAX_S) sec = ADSB_429_MAX_S;
+            _hold[srcs[i].id] = true;
+            _holdStart[srcs[i].id] = nowMs;
+            _holdDur[srcs[i].id] = sec * 1000UL;
+            if (_lastRetryAfterS)
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, Retry-After %u s); holding off %u s, using the other feeds\n",
+                         srcs[i].host, (unsigned)_lastRetryAfterS, (unsigned)sec);
+            else
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %u s, using the other feeds\n",
+                         srcs[i].host, (unsigned)sec);
+        } else if (srcs[i].kind == FeedKind::ReApi && !ok &&
+            (_lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
             _reapiBackoffDur = ADSB_REAPI_BACKOFF_MS;
             ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; using the other feed for %us\n",
                           ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
-                          _lastHttpCode == 429 ? "" :
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
                                            : " -- no API key set, and this network is not a known feeder",
                           (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
@@ -345,6 +398,9 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
         if (nm < 1.0) nm = 1.0;
         if (kind == FeedKind::ReApi)
             snprintf(url, sizeof(url), "https://%s/?circle=%.5f,%.5f,%.0f", host, _lat, _lon, nm);
+        else if (kind == FeedKind::AdsbFi)
+            snprintf(url, sizeof(url), "https://%s/api/v3/lat/%.4f/lon/%.4f/dist/%.0f",
+                     host, _lat, _lon, nm > 250.0 ? 250.0 : nm);
         else
             snprintf(url, sizeof(url), "https://%s/v2/point/%.4f/%.4f/%.0f", host, _lat, _lon, nm);
     }
@@ -395,9 +451,12 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     // begin() clears custom headers, so this is added fresh on every request.
     if (kind == FeedKind::ReApi && _apiKey.length()) _http.addHeader("x-api-key", _apiKey);
     _http.addHeader("Accept", "application/json");
+    static const char *kWantHeaders[] = { "Retry-After" };
+    _http.collectHeaders(kWantHeaders, 1);
 
     const int code = _http.GET();
     _lastHttpCode = code;
+    _lastRetryAfterS = (code == 429) ? parse_retry_after(_http.header("Retry-After")) : 0;
     if (code != 200) {
         char tls[128] = "";
         const int tlsCode = _client.lastError(tls, sizeof(tls));
