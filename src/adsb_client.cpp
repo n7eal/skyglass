@@ -154,6 +154,13 @@ bool AdsbClient::reapiFirst() const { return kOrders[_publicOrder][0] == SRC_REA
 
 // Retry-After is either delay-seconds or an HTTP-date. Only the seconds form is parsed;
 // a date (or anything else) returns 0 and the caller uses ADSB_429_DEFAULT_S.
+static const char *fmt_dur(uint32_t s, char *buf, size_t cap) {
+    if (s >= 3600)    snprintf(buf, cap, "%uh%02um", (unsigned)(s / 3600), (unsigned)((s % 3600) / 60));
+    else if (s >= 60) snprintf(buf, cap, "%um%02us", (unsigned)(s / 60), (unsigned)(s % 60));
+    else              snprintf(buf, cap, "%us", (unsigned)s);
+    return buf;
+}
+
 static uint32_t parse_retry_after(const String &v) {
     if (v.length() == 0 || v.length() > 9) return 0;
     for (size_t i = 0; i < v.length(); ++i) if (!isdigit((unsigned char)v[i])) return 0;
@@ -260,12 +267,13 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             _hold[srcs[i].id] = true;
             _holdStart[srcs[i].id] = nowMs;
             _holdDur[srcs[i].id] = sec * 1000UL;
+            char d[16];
             if (_lastRetryAfterS)
-                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, Retry-After %u s); holding off %u s, using the other feeds\n",
-                         srcs[i].host, (unsigned)_lastRetryAfterS, (unsigned)sec);
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, Retry-After %u s); holding off %s, using the other feeds\n",
+                         srcs[i].host, (unsigned)_lastRetryAfterS, fmt_dur(sec, d, sizeof(d)));
             else
-                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %u s, using the other feeds\n",
-                         srcs[i].host, (unsigned)sec);
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %s, using the other feeds\n",
+                         srcs[i].host, fmt_dur(sec, d, sizeof(d)));
         } else if (srcs[i].kind == FeedKind::ReApi && !ok &&
             (_lastHttpCode == 403 || _lastHttpCode == 401)) {
             _reapiBackoff = true;
@@ -294,6 +302,8 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             out.swap(list);
             return true;
         }
+        if (ok && list.empty() && (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) == 0)
+            ADSB_LOG("[adsb] %s answered with 0 aircraft\n", srcs[i].host);
         if (ok && !anyOk) {
             anyOk = true;
             emptyHost = srcs[i].host;
@@ -451,6 +461,11 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     // begin() clears custom headers, so this is added fresh on every request.
     if (kind == FeedKind::ReApi && _apiKey.length()) _http.addHeader("x-api-key", _apiKey);
     _http.addHeader("Accept", "application/json");
+    // adsb.fi sends HTTP/1.1 replies chunked, and we parse straight from the raw stream,
+    // which still carries the chunk-size lines: ArduinoJson read the leading "1f4a" as the
+    // number 1, returned Ok, and the reply had no aircraft list. Asking for HTTP/1.0 makes
+    // the server send a plain body. (useHTTP10 also flips setReuse, so set it every time.)
+    _http.useHTTP10(kind == FeedKind::AdsbFi);
     static const char *kWantHeaders[] = { "Retry-After" };
     _http.collectHeaders(kWantHeaders, 1);
 
@@ -514,7 +529,11 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
 
     JsonArrayConst arr = doc["ac"].as<JsonArrayConst>();
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();
-    if (arr.isNull()) return false;
+    if (arr.isNull()) {
+        ADSB_LOG("[adsb] %s answered %u bytes but no 'ac'/'aircraft' list (in %u ms)\n",
+                 host, (unsigned)jsonStream.bytesRead(), (unsigned)(millis() - t0));
+        return false;
+    }
 
     // Keep the ADSB_MAX_AIRCRAFT *nearest* aircraft
     std::vector<Aircraft> tmp;

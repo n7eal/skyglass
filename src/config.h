@@ -95,10 +95,11 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // Terms: personal, non-commercial use; credit adsb.fi with a link (About screen).
 #define ADSB_FI_HOST        "opendata.adsb.fi"
 // HTTP 429 from any feed: hold that feed off for its Retry-After (seconds), or this long if
-// the header is missing, and use the others meanwhile. Clamped so a bogus value cannot
-// silence a feed for hours.
+// the header is missing, and use the others meanwhile. A long Retry-After is real: adsb.lol
+// answers an exhausted daily key quota with the seconds until 00:00 UTC (seen: 24911 s),
+// and knocking every few minutes until then only collects more 429s. Capped at a day.
 #define ADSB_429_DEFAULT_S  60
-#define ADSB_429_MAX_S      900
+#define ADSB_429_MAX_S      86400
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.
