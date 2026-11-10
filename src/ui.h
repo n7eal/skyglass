@@ -2,6 +2,7 @@
 // M3 UI: swipeable views (radar / list / stats) + tap-to-inspect detail card.
 // Pure LVGL, portable (device + SDL simulator). Builds on top of radar_view.
 #include <stddef.h>   // size_t (ui_format_clock)
+#include <stdint.h>   // uint32_t (ui_clock_shown_ms)
 void ui_create(void);            // build the whole UI on the active screen
 void ui_on_data_updated(void);
 void ui_track_selected(bool on);   // remote equivalent of the card TRACK button (/view?trk=)
