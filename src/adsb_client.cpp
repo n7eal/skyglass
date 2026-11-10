@@ -150,7 +150,7 @@ static const char *const kSrcHost[AdsbClient::SRC_COUNT] = { ADSB_REAPI_HOST, AD
 
 int AdsbClient::orderCount() { return (int)(sizeof(kOrders) / sizeof(kOrders[0])); }
 const char *AdsbClient::orderLabel(int o) { return (o >= 0 && o < orderCount()) ? kOrderLabels[o] : "?"; }
-bool AdsbClient::reapiFirst() const { return kOrders[_publicOrder][0] == SRC_REAPI; }
+bool AdsbClient::reapiFirst() const { return kOrders[_publicOrder][0] == SRC_REAPI && _apiKey.length(); }
 
 // Retry-After is either delay-seconds or an HTTP-date. Only the seconds form is parsed;
 // a date (or anything else) returns 0 and the caller uses ADSB_429_DEFAULT_S.
@@ -175,6 +175,7 @@ void AdsbClient::setApiKey(const char* k) {
     _apiKey = k ? k : "";
     _apiKey.trim();
     _reapiBackoff = false;                 // a new key deserves an immediate try
+    _noKeyLogged = false;
     const unsigned len = _apiKey.length();
     if (len) snprintf(_keyDesc, sizeof(_keyDesc), "key ...%s", _apiKey.c_str() + (len > 4 ? len - 4 : 0));
     else     snprintf(_keyDesc, sizeof(_keyDesc), "no key");
@@ -232,6 +233,13 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     for (int k = 0; k < SRC_COUNT; ++k) {
         const int s = kOrders[_publicOrder][k];
         if (_hold[s]) continue;                              // told to wait (429)
+        if (s == SRC_REAPI && !_apiKey.length()) {          // keyless requests get 401 now
+            if (!_noKeyLogged) {
+                _noKeyLogged = true;
+                ADSB_LOG("[adsb] adsb.lol needs an API key (config page); skipping it\n");
+            }
+            continue;
+        }
         if (s == SRC_REAPI && !reapiDue) continue;           // rate gate / refusal backoff
         const FeedKind kind = (s == SRC_REAPI) ? FeedKind::ReApi
                             : (s == SRC_ADSBFI) ? FeedKind::AdsbFi : FeedKind::Point;
@@ -283,7 +291,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; resting it for %s (saving a key retries now)\n",
                           ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
-                                           : " -- no API key set, and this network is not a known feeder",
+                                           : " -- adsb.lol needs an API key",
                           fmt_dur(ADSB_REAPI_BACKOFF_MS / 1000, d, sizeof(d)));
         } else if (srcs[i].kind == FeedKind::ReApi && !ok && !reapiHasGoodIp(nowMs)) {
             // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS,

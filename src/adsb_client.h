@@ -38,8 +38,8 @@ public:
     int  sourceMode() const { return _srcMode; }
     const char* localHost() const { return _localHost.c_str(); }
 
-    // adsb.lol API key, sent as x-api-key on re-api requests. Empty = no header (re-api
-    // then only answers when the request comes from a network that feeds adsb.lol).
+    // adsb.lol API key, sent as x-api-key on re-api requests. re-api requires one now, so
+    // with no key saved it is skipped and the other feeds are used.
     void setApiKey(const char* k);
     // "key ...abcd" (last four characters) or "no key" -- for logs, never the key itself.
     const char* apiKeyDesc() const { return _keyDesc; }
@@ -94,6 +94,7 @@ private:
     String _localHost;
     String _apiKey;
     char   _keyDesc[16] = "no key";
+    bool   _noKeyLogged = false;       // said once that re-api is skipped for want of a key
     int    _publicOrder = 0;
     uint32_t _lastRetryAfterS = 0;       // Retry-After of the last 429 (0 = none sent)
     // Per-feed hold after HTTP 429, honouring Retry-After.

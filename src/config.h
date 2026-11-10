@@ -61,9 +61,10 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 
 // ---------- ADS-B API (free, non-commercial) ----------
 // Primary: re-adsb.lol (adsb.lol's readsb "re-api"), GET /?circle={lat},{lon},{radius_nm}. Same readsb
-// aircraft format as the fallbacks. Feeder-only: it answers requests coming from an IP that
-// feeds adsb.lol -- or, with an adsb.lol API key entered on the config page (sent as the
-// x-api-key header), from anywhere. Rate limit is 10 requests/minute, so it is hard-gated in AdsbClient::poll
+// aircraft format as the fallbacks. Needs an adsb.lol API key (config page; sent as the
+// x-api-key header): adsb.lol no longer answers keyless requests, even from a feeder's
+// network (401), and a feeder key works where a 30-day key has expired. With no key saved
+// re-api is skipped entirely. Rate limit is 10 requests/minute, so it is hard-gated in AdsbClient::poll
 // to one request per ADSB_REAPI_MIN_INTERVAL_MS -- every attempt counts, failures included.
 #define ADSB_REAPI_HOST            "re-api.adsb.lol"
 // The re-api limit is 10/min. (An earlier cap of ~6/min was a misdiagnosis: the refused
