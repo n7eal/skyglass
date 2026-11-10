@@ -7,7 +7,10 @@ void ui_on_data_updated(void);
 void ui_track_selected(bool on);   // remote equivalent of the card TRACK button (/view?trk=)
 // Re-tint the on-scope controls after a theme change (long-press or the config page).
 void ui_theme_changed(void);
-void ui_show_view(int idx);      // 0 radar, 1 list, 2 stats, 3 weather, 4 tracked, 5 clock, 6 about
+void ui_show_view(int idx);      // 0 radar, 1 list, 2 stats, 3 weather, 4 tracked, 5 clock, 6 about, 7 settings
+// How long the clock screen has been showing, in ms; 0 when another screen is up. Safe to
+// read from the feed task (a single 32-bit value written by the UI).
+uint32_t ui_clock_shown_ms(void);
 void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock);  // HUD: signal bars (count=RSSI, colour: red=down, amber=stale feed, white=ok) + clock
 void ui_set_battery(int pct, bool charging, bool present);  // top HUD battery indicator
 void ui_set_date(const char *date);  // top HUD date line (e.g. "08 Jun 2026")

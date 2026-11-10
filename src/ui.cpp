@@ -1378,6 +1378,21 @@ static void refresh_settings(void) {
     }
 }
 
+// When the clock screen came up (millis(), 0 = not showing). Written on the UI core only.
+static volatile uint32_t s_clockSince = 0;
+static void note_active_tile(void) {
+    if (!s_tv) return;
+    if (lv_tileview_get_tile_act(s_tv) == s_tileClock) {
+        if (!s_clockSince) s_clockSince = millis() | 1;   // never 0 while showing
+    } else {
+        s_clockSince = 0;
+    }
+}
+uint32_t ui_clock_shown_ms(void) {
+    const uint32_t since = s_clockSince;
+    return since ? millis() - since : 0;
+}
+
 // Rebuild whichever of list/stats is currently on screen (called on poll and on swipe).
 static void refresh_active_tile(void) {
     if (!s_tv) return;
@@ -1560,8 +1575,15 @@ void ui_theme_changed(void) {
     if (s_cardTrackLbl) lv_obj_set_style_text_color(s_cardTrackLbl, a, 0);
 }
 
+// idx is the stable /view number (0 radar, 1 list, 2 stats, 3 weather, 4 tracked, 5 clock,
+// 6 about, 7 settings), not the swipe position, so reordering the screens does not break
+// the capture tool, the docs, or quiet hours' "show the clock" (5).
 void ui_show_view(int idx) {
-    if (s_tv && idx >= 0 && idx <= 7) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
+    if (!s_tv || idx < 0 || idx > 7) return;
+    lv_obj_t *const byView[8] = { s_tileRadar, s_tileList, s_tileStats, s_tileWeather,
+                                  s_tileTracked, s_tileClock, s_tileAbout, s_tileSettings };
+    if (byView[idx]) lv_obj_set_tile(s_tv, byView[idx], LV_ANIM_OFF);
+    note_active_tile();                       // quiet hours switches to the clock this way
 }
 
 // ------------------------------------------------------------------- splash
@@ -1913,20 +1935,20 @@ void ui_create(void) {
     lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
     lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
 
-    s_tileRadar = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
-    s_tileList  = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_HOR);
-    s_tileStats = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_HOR);
-    s_tileWeather = lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_HOR);
-    s_tileTracked = lv_tileview_add_tile(s_tv, 4, 0, LV_DIR_HOR);
-    s_tileClock = lv_tileview_add_tile(s_tv, 5, 0, LV_DIR_HOR);
-    s_tileAbout = lv_tileview_add_tile(s_tv, 6, 0, LV_DIR_HOR);
-    // Settings last rather than wedged next to stats: inserting in the middle would
-    // renumber every view behind it, and /view indices are baked into the capture tool
-    // and the docs.
-    s_tileSettings = lv_tileview_add_tile(s_tv, 7, 0, LV_DIR_LEFT);
+    // Swipe order: radar, clock, weather radar, aircraft list, tracked, stats, settings,
+    // about. The /view?i=N numbers used by the capture tool, the docs and quiet hours are
+    // NOT these positions -- ui_show_view() maps them by screen, so they stay stable.
+    s_tileRadar    = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+    s_tileClock    = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_HOR);
+    s_tileWeather  = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_HOR);
+    s_tileList     = lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_HOR);
+    s_tileTracked  = lv_tileview_add_tile(s_tv, 4, 0, LV_DIR_HOR);
+    s_tileStats    = lv_tileview_add_tile(s_tv, 5, 0, LV_DIR_HOR);
+    s_tileSettings = lv_tileview_add_tile(s_tv, 6, 0, LV_DIR_HOR);
+    s_tileAbout    = lv_tileview_add_tile(s_tv, 7, 0, LV_DIR_LEFT);
     // Rebuild the list/stats with the latest data the moment they slide into view
     // (between polls they'd otherwise show whatever was there when last visible).
-    lv_obj_add_event_cb(s_tv, [](lv_event_t *) { refresh_active_tile(); }, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(s_tv, [](lv_event_t *) { note_active_tile(); refresh_active_tile(); }, LV_EVENT_VALUE_CHANGED, nullptr);
 
     // --- radar tile ---
     lv_obj_clear_flag(s_tileRadar, LV_OBJ_FLAG_SCROLLABLE);

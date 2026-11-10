@@ -119,6 +119,7 @@ static volatile bool         g_requery = false;                      // range ch
 static float                 g_requeryKm = 0.0f;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
+static volatile bool         g_feedPaused = false;                   // on the clock long enough: internet fetches paused
 static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
 static int                   g_qhMode  = 0;                          // quiet hours: 0=off 1=dim 2=screen off 3=clock screen (web/NVS)
@@ -285,6 +286,28 @@ static void adsb_task(void*) {
         // the reboot below is gated on being connected the device sat unreachable instead
         // of recovering. Reassociating is the only intermediate step that is known to
         // return, so it is the only one kept.
+        // Clock screen up for CLOCK_FEED_PAUSE_MS: stop fetching aircraft from the internet
+        // to save API allowance. A local receiver that is answering costs nothing, so it
+        // keeps polling. Leaving the clock polls at once.
+        {
+            const bool wantPause = ui_clock_shown_ms() >= CLOCK_FEED_PAUSE_MS &&
+                                   !g_adsb.lastPollWasLocal();
+            if (wantPause != g_feedPaused) {
+                g_feedPaused = wantPause;
+                if (wantPause) {
+                    ADSB_LOG("[adsb] clock showing for %u min: internet aircraft fetches paused\n",
+                             (unsigned)(CLOCK_FEED_PAUSE_MS / 60000UL));
+                } else {
+                    ADSB_LOG("[adsb] left the clock: aircraft fetches resumed\n");
+                    lastPoll = 0;                 // fresh data right away
+                }
+            }
+        }
+        if (g_feedPaused) {                       // deliberate: keep the self-heal quiet
+            lastFeedOk = millis();
+            healStage = 0;
+            healActionMs = 0;
+        }
         if (!conn) {
             // Being disconnected simply re-arms the stall clock. There used to be a branch
             // here that rebooted if the station had not re-associated within a minute of a
@@ -334,7 +357,7 @@ static void adsb_task(void*) {
                                                            : ADSB_PUBLIC_POLL_MS;
             if (!g_adsb.lastPollWasLocal() && pollInterval < publicMin)
                 pollInterval = publicMin;
-            if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
+            if (!g_feedPaused && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed
                 lastPoll = nowMs;
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
@@ -1982,7 +2005,9 @@ static const DevToggle DEV_TOGGLES[] = {
     { "HIDE GND",    [] { return g_hideGround; },
                      [](bool v) { g_hideGround = v; devNvsBool("hideground", v); } },
     { "MIL ONLY",    [] { return g_milOnly; },
-                     [](bool v) { g_milOnly = v; devNvsBool("milonly", v); } },
+                     // Must reach the feed filter too (as the web checkbox does), or the
+                     // toggle only changed the saved setting and took effect after a reboot.
+                     [](bool v) { g_milOnly = v; g_adsb.setMilitaryOnly(v); devNvsBool("milonly", v); } },
     { "MUTE",        [] { return g_muted; },
                      [](bool v) { g_muted = v; audio_set_muted(v); devNvsBool("mute", v); } },
     { "AUTO CHECK",  [] { return updater_auto_check(); },
@@ -2464,7 +2489,7 @@ void loop() {
         // "fresh" = we got aircraft data recently. Catches a stalled feed (weak WiFi dropping
         // polls intermittently) that never trips the consecutive-fail counter -> aircraft
         // freeze but the icon would otherwise stay white.
-        const bool feedFresh = wifiUp && (millis() - g_lastFeedOkMs < 18000UL);
+        const bool feedFresh = wifiUp && (g_feedPaused || millis() - g_lastFeedOkMs < 18000UL);
         ui_set_status(wifiUp, feedFresh, rssi, clk);
 #if !BOARD_HAS_WIFIMANAGER
         wifi_portal_tick();

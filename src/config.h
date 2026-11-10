@@ -78,6 +78,9 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // its reply never trips the per-read timeout, and the TLS handshake's own default is 120 s,
 // so without this one slow answer held the scope frozen for 30-40 s at a time.
 #define ADSB_FETCH_DEADLINE_MS     9000
+// Sitting on the clock screen this long pauses internet aircraft fetches (API allowance);
+// they resume the moment another screen is shown. A local receiver keeps polling.
+#define CLOCK_FEED_PAUSE_MS        180000UL  // 3 min
 #define ADSB_TLS_HANDSHAKE_S       6        // NetworkClientSecure default is 120 s
 // re-api.adsb.lol is several servers behind one name, and some of them can be unreachable
 // from a given network (seen: 2 of 4 timing out). lwIP's resolver only ever returns one
