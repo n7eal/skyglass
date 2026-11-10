@@ -72,8 +72,14 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // Poll cadence when re-api is not the first feed (airplanes.live first, or a local receiver
 // falling back). airplanes.live allows far more than this.
 #define ADSB_PUBLIC_POLL_MS        6700
-#define ADSB_REAPI_BACKOFF_MS      60000    // after HTTP 429/403, leave re-api alone this long
+// HTTP 401/403: the key (or feeder recognition) was rejected. That does not fix itself
+// within a minute, and retrying every minute only adds rejected requests -- so rest
+// re-api for half an hour. Saving a new key on the config page retries at once.
+#define ADSB_REAPI_BACKOFF_MS      1800000  // 30 min
 #define ADSB_REAPI_SLOW_BACKOFF_MS 20000    // after a re-api timeout / connection error / overrun
+// Every server behind the name has failed: rest re-api this long instead of re-trying a
+// dead server (a 6 s connect timeout each time) every 20 s.
+#define ADSB_REAPI_ALLDOWN_BACKOFF_MS 300000 // 5 min
 // Hard cap on one feed request, connect + TLS + download + parse. A server that trickles
 // its reply never trips the per-read timeout, and the TLS handshake's own default is 120 s,
 // so without this one slow answer held the scope frozen for 30-40 s at a time.

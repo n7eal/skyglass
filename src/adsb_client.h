@@ -108,7 +108,7 @@ private:
     // re-api rate gate. Plain unsigned millis() deltas, so they survive the 49-day wrap.
     bool     _reapiArmed = false;        // false until the first attempt
     uint32_t _reapiLastMs = 0;           // millis() of the last attempt (success or not)
-    bool     _reapiBackoff = false;      // refused with 429/403: wait ADSB_REAPI_BACKOFF_MS
+    bool     _reapiBackoff = false;      // resting re-api for _reapiBackoffDur (refused / failed)
     uint32_t _reapiBackoffStart = 0;
     uint32_t _reapiBackoffDur = 0;       // how long this backoff lasts
     uint32_t _lastFetchMs = 0;

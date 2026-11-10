@@ -279,21 +279,26 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
             _reapiBackoffDur = ADSB_REAPI_BACKOFF_MS;
-            ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; using the other feed for %us\n",
+            char d[16];
+            ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; resting it for %s (saving a key retries now)\n",
                           ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
                           _apiKey.length() ? " -- check the adsb.lol API key on the config page"
                                            : " -- no API key set, and this network is not a known feeder",
-                          (unsigned)(ADSB_REAPI_BACKOFF_MS / 1000));
+                          fmt_dur(ADSB_REAPI_BACKOFF_MS / 1000, d, sizeof(d)));
         } else if (srcs[i].kind == FeedKind::ReApi && !ok && !reapiHasGoodIp(nowMs)) {
-            // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS.
-            // These come in runs, and each one costs a timeout before the other feed is
-            // tried -- so give re-api a short rest rather than paying that every poll.
+            // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS,
+            // and no healthy server left to try. With a server list, every one has now
+            // failed: rest for minutes rather than knocking on a dead server (a 6 s
+            // timeout) every 20 s. Without a list (DNS failed), keep the short rest.
+            const bool allDown = _reapiNIps > 0;
             _reapiBackoff = true;
             _reapiBackoffStart = nowMs;
-            _reapiBackoffDur = ADSB_REAPI_SLOW_BACKOFF_MS;
-            ADSB_LOG("[adsb] %s (%s) %s after %u ms; using the other feed for %us\n",
+            _reapiBackoffDur = allDown ? ADSB_REAPI_ALLDOWN_BACKOFF_MS : ADSB_REAPI_SLOW_BACKOFF_MS;
+            char d[16];
+            ADSB_LOG("[adsb] %s (%s) %s after %u ms%s; using the other feeds for %s\n",
                      ADSB_REAPI_HOST, _reapiIp, _lastTooSlow ? "too slow" : "failed",
-                     (unsigned)_lastFetchMs, (unsigned)(ADSB_REAPI_SLOW_BACKOFF_MS / 1000));
+                     (unsigned)_lastFetchMs, allDown ? ", and every server has failed" : "",
+                     fmt_dur(_reapiBackoffDur / 1000, d, sizeof(d)));
         }
 
         if (ok && !list.empty()) {
