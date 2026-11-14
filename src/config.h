@@ -60,27 +60,10 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define IDLE_DIM_MS         20000          // dim the screen after this long without a touch
 
 // ---------- ADS-B API (free, non-commercial) ----------
-// Primary: re-adsb.lol (adsb.lol's readsb "re-api"), GET /?circle={lat},{lon},{radius_nm}. Same readsb
-// aircraft format as the fallbacks. Needs an adsb.lol API key (config page; sent as the
-// x-api-key header): adsb.lol no longer answers keyless requests, even from a feeder's
-// network (401), and a feeder key works where a 30-day key has expired. With no key saved
-// re-api is skipped entirely. Rate limit is 10 requests/minute, so it is hard-gated in AdsbClient::poll
-// to one request per ADSB_REAPI_MIN_INTERVAL_MS -- every attempt counts, failures included.
-#define ADSB_REAPI_HOST            "re-api.adsb.lol"
-// The re-api limit is 10/min. (An earlier cap of ~6/min was a misdiagnosis: the refused
-// connections were dead servers behind the name, now skipped by the server failover.)
-#define ADSB_REAPI_MIN_INTERVAL_MS 6700     // 60000 / 6700 = 8.96 -> at most 9 requests/min
-// Poll cadence when re-api is not the first feed (airplanes.live first, or a local receiver
-// falling back). airplanes.live allows far more than this.
+// Internet feeds: airplanes.live and adsb.fi, tried in the order set on the config page
+// ("Internet source order"); a receiver on your own network, if set, comes first.
+// Poll cadence for the internet feeds (a local receiver keeps POLL_INTERVAL_MS).
 #define ADSB_PUBLIC_POLL_MS        6700
-// HTTP 401/403: the key (or feeder recognition) was rejected. That does not fix itself
-// within a minute, and retrying every minute only adds rejected requests -- so rest
-// re-api for half an hour. Saving a new key on the config page retries at once.
-#define ADSB_REAPI_BACKOFF_MS      1800000  // 30 min
-#define ADSB_REAPI_SLOW_BACKOFF_MS 20000    // after a re-api timeout / connection error / overrun
-// Every server behind the name has failed: rest re-api this long instead of re-trying a
-// dead server (a 6 s connect timeout each time) every 20 s.
-#define ADSB_REAPI_ALLDOWN_BACKOFF_MS 300000 // 5 min
 // Hard cap on one feed request, connect + TLS + download + parse. A server that trickles
 // its reply never trips the per-read timeout, and the TLS handshake's own default is 120 s,
 // so without this one slow answer held the scope frozen for 30-40 s at a time.
@@ -89,25 +72,17 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // they resume the moment another screen is shown. A local receiver keeps polling.
 #define CLOCK_FEED_PAUSE_MS        180000UL  // 3 min
 #define ADSB_TLS_HANDSHAKE_S       6        // NetworkClientSecure default is 120 s
-// re-api.adsb.lol is several servers behind one name, and some of them can be unreachable
-// from a given network (seen: 2 of 4 timing out). lwIP's resolver only ever returns one
-// address and keeps it, which turned one dead server into minute-long runs of failures.
-// AdsbClient fetches all of them itself, sticks to one that answers, and skips a dead one.
-#define ADSB_REAPI_IP_BAD_MS       600000   // skip a server that did not answer for 10 min
-#define ADSB_REAPI_IP_REFRESH_MS   600000   // re-read the server list every 10 min
-// airplanes.live: the fallback by default, or the first feed when the config page sets
-// "Internet source order" to airplanes.live first. GET /v2/point/{lat}/{lon}/{radius_nm}. (api.adsb.lol, the
-// public v2 API, was removed: deprecated.)
-#define ADSB_FALLBACK_HOST  "api.airplanes.live"
+// airplanes.live: GET /v2/point/{lat}/{lon}/{radius_nm}, readsb format ("ac" list).
+#define ADSB_AIRPLANES_HOST "api.airplanes.live"
 // adsb.fi open data: GET /api/v3/lat/{lat}/lon/{lon}/dist/{nm} (max 250 NM), ADSBx-v2 format
 // ("ac" list). No key; 1 request/s on public endpoints, and 4xx/429 replies count toward
 // it -- "excessive invalid HTTP requests results in a temporary IP address restriction".
 // Terms: personal, non-commercial use; credit adsb.fi with a link (About screen).
 #define ADSB_FI_HOST        "opendata.adsb.fi"
 // HTTP 429 from any feed: hold that feed off for its Retry-After (seconds), or this long if
-// the header is missing, and use the others meanwhile. A long Retry-After is real: adsb.lol
-// answers an exhausted daily key quota with the seconds until 00:00 UTC (seen: 24911 s),
-// and knocking every few minutes until then only collects more 429s. Capped at a day.
+// the header is missing, and use the other meanwhile. A long Retry-After can be real (a
+// daily quota that resets at midnight UTC), and knocking every few minutes until then
+// only collects more 429s. Capped at a day.
 #define ADSB_429_DEFAULT_S  60
 #define ADSB_429_MAX_S      86400
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page

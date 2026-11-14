@@ -1,5 +1,5 @@
 #pragma once
-// Fetches nearby aircraft from adsb.lol's re-api (fallback: airplanes.live) and parses
+// Fetches nearby aircraft from airplanes.live and adsb.fi (or a local receiver) and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>
@@ -38,23 +38,15 @@ public:
     int  sourceMode() const { return _srcMode; }
     const char* localHost() const { return _localHost.c_str(); }
 
-    // adsb.lol API key, sent as x-api-key on re-api requests. re-api requires one now, so
-    // with no key saved it is skipped and the other feeds are used.
-    void setApiKey(const char* k);
-    // "key ...abcd" (last four characters) or "no key" -- for logs, never the key itself.
-    const char* apiKeyDesc() const { return _keyDesc; }
-    bool hasApiKey() const { return _apiKey.length() > 0; }
-
     // Internet feeds, and the order they are tried in (config page "Internet source order").
-    // Orders 0 and 1 keep their old meaning (adsb.lol / airplanes.live first) with adsb.fi
-    // appended. Each feed keeps its own limits whatever its position: re-api is still
-    // gated to ADSB_REAPI_MIN_INTERVAL_MS, and any feed that answers 429 is held off.
-    enum Source { SRC_REAPI = 0, SRC_AIRPLANES = 1, SRC_ADSBFI = 2, SRC_COUNT = 3 };
+    //   0 = airplanes.live, then adsb.fi   (default)
+    //   1 = adsb.fi, then airplanes.live
+    // A feed that answers 429 is held off for its Retry-After and the other one is used.
+    enum Source { SRC_AIRPLANES = 0, SRC_ADSBFI = 1, SRC_COUNT = 2 };
     static int         orderCount();
     static const char *orderLabel(int order);
     void setPublicOrder(int o) { _publicOrder = (o >= 0 && o < orderCount()) ? o : 0; }
     int  publicOrder() const { return _publicOrder; }
-    bool reapiFirst() const;                   // decides the poll cadence
     bool lastPollWasLocal() const { return _lastWasLocal; }
     // Host that supplied the last successful poll (for the serial log).
     const char* lastSource() const { return _lastSource; }
@@ -66,16 +58,13 @@ public:
     uint32_t lastOkMs() const { return _lastOkMs; }
     // How long the most recent single-host request took, in ms (for the log).
     uint32_t lastFetchMs() const { return _lastFetchMs; }
-    // Server address the last re-api request resolved to ("?" if unknown), for the log.
-    const char* lastReapiIp() const { return _reapiIp; }
 
 private:
     // How a host is queried.
     //   Point -- HTTPS /v2/point/{lat}/{lon}/{nm}       (airplanes.live)
-    //   ReApi -- HTTPS /?circle={lat},{lon},{nm}         (re-api.adsb.lol)
     //   Local -- plain HTTP aircraft.json on your own LAN receiver
     //   AdsbFi -- HTTPS /api/v3/lat/{lat}/lon/{lon}/dist/{nm} (opendata.adsb.fi)
-    enum class FeedKind { Point, ReApi, Local, AdsbFi };
+    enum class FeedKind { Point, Local, AdsbFi };
 
     // One host, one attempt. Sets _lastHttpCode.
     bool fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind);
@@ -92,9 +81,6 @@ private:
     HTTPClient _http;
     const char* _lastHost = nullptr;
     String _localHost;
-    String _apiKey;
-    char   _keyDesc[16] = "no key";
-    bool   _noKeyLogged = false;       // said once that re-api is skipped for want of a key
     int    _publicOrder = 0;
     uint32_t _lastRetryAfterS = 0;       // Retry-After of the last 429 (0 = none sent)
     // Per-feed hold after HTTP 429, honouring Retry-After.
@@ -106,27 +92,6 @@ private:
     const char* _lastSource = "";
     int    _lastHttpCode = 0;
 
-    // re-api rate gate. Plain unsigned millis() deltas, so they survive the 49-day wrap.
-    bool     _reapiArmed = false;        // false until the first attempt
-    uint32_t _reapiLastMs = 0;           // millis() of the last attempt (success or not)
-    bool     _reapiBackoff = false;      // resting re-api for _reapiBackoffDur (refused / failed)
-    uint32_t _reapiBackoffStart = 0;
-    uint32_t _reapiBackoffDur = 0;       // how long this backoff lasts
     uint32_t _lastFetchMs = 0;
     bool     _lastTooSlow = false;       // the last request hit ADSB_FETCH_DEADLINE_MS
-    char     _reapiIp[16] = "?";
-
-    // re-api server pool: every IPv4 address behind ADSB_REAPI_HOST.
-    static const int kReapiMaxIps = 8;
-    uint32_t _reapiIps[kReapiMaxIps] = {};
-    bool     _reapiBad[kReapiMaxIps] = {};
-    uint32_t _reapiBadSince[kReapiMaxIps] = {};
-    int      _reapiNIps = 0;
-    int      _reapiCur = 0;              // server currently preferred
-    int      _reapiCurIdx = -1;          // server used by the request in flight (-1 = by name)
-    uint32_t _reapiIpsAt = 0;
-    void refreshReapiIps(uint32_t now);
-    int  pickReapiIp(uint32_t now);
-    void markReapiIp(bool ok);
-    bool reapiHasGoodIp(uint32_t now) const;
 };

@@ -136,7 +136,6 @@ static int                   g_trafficMode = 0;                      // 0 = airc
 static int                   g_adsbOrder = 0;                        // internet feed order (see AdsbClient::setPublicOrder)
 static int                   g_adsbSrc = 0;                          // 0 auto, 1 local only, 2 public only
 static String                g_adsbLocal;                            // dump1090/tar1090 host on the LAN ("" = public feeds)
-static String                g_adsbKey;                              // adsb.lol API key for re-api (web/NVS; empty = none)
 static String                g_aisKey;                               // aisstream.io API key (web/NVS; empty = off)
 static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
@@ -348,13 +347,8 @@ static void adsb_task(void*) {
             const uint32_t nowMs = millis();
             uint32_t pollInterval = g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS;
             // The public feeds are rate-limited, so only a local receiver that is answering
-            // keeps the fast cadence. AdsbClient also hard-gates re-api, so an early poll
-            // (zoom re-query) falls through to the other feed instead.
-            // re-api first: poll a little slower than its gate (the gate's clock starts a
-            // few ms after this one), so re-api is due every time rather than skipped and
-            // quietly replaced by the other feed. airplanes.live first: its faster cadence.
-            const uint32_t publicMin = g_adsb.reapiFirst() ? ADSB_REAPI_MIN_INTERVAL_MS + 250
-                                                           : ADSB_PUBLIC_POLL_MS;
+            // keeps the fast cadence.
+            const uint32_t publicMin = ADSB_PUBLIC_POLL_MS;
             if (!g_adsb.lastPollWasLocal() && pollInterval < publicMin)
                 pollInterval = publicMin;
             if (!g_feedPaused && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed
@@ -363,14 +357,8 @@ static void adsb_task(void*) {
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
                 if (g_adsb.poll(fresh)) {
-                    {
-                        const bool viaReapi = strcmp(g_adsb.lastSource(), ADSB_REAPI_HOST) == 0;
-                        ADSB_LOG("[adsb] fetched %u aircraft (%s%s%s%s%s) in %u ms\n", (unsigned)fresh.size(),
-                                 g_adsb.lastSource(),
-                                 viaReapi ? " " : "", viaReapi ? g_adsb.lastReapiIp() : "",
-                                 viaReapi ? ", " : "", viaReapi ? g_adsb.apiKeyDesc() : "",
-                                 (unsigned)g_adsb.lastFetchMs());
-                    }
+                    ADSB_LOG("[adsb] fetched %u aircraft (%s) in %u ms\n", (unsigned)fresh.size(),
+                             g_adsb.lastSource(), (unsigned)g_adsb.lastFetchMs());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;
@@ -563,9 +551,12 @@ static void loadSettings() {
     g_trafficMode      = p.getInt("traffic", 0);
     g_aisKey           = p.getString("aiskey", "");
     g_adsbLocal        = p.getString("adsblocal", "");
-    g_adsbKey          = p.getString("adsbkey", "");
     g_adsbSrc          = p.getInt("adsbsrc", 0);
-    g_adsbOrder        = p.getInt("adsborder", 0);
+    // Feed order: "feedorder" (0 airplanes.live first, 1 adsb.fi first). Before adsb.lol was
+    // removed the setting was "adsborder", six orderings of three feeds; carry over which
+    // of the two remaining feeds came first (2, 3 and 5 had adsb.fi ahead of airplanes.live).
+    const int oldOrder = p.getInt("adsborder", 0);
+    g_adsbOrder        = p.getInt("feedorder", (oldOrder == 2 || oldOrder == 3 || oldOrder == 5) ? 1 : 0);
     g_time24           = p.getBool("time24", false);
     g_typeIcons        = p.getBool("typeicons", true);
     g_bigText          = p.getBool("bigtext", false);
@@ -577,8 +568,15 @@ static void loadSettings() {
     g_adsb.setLocalHost(g_adsbLocal.c_str());
     g_adsb.setSourceMode(g_adsbSrc);
     g_adsb.setPublicOrder(g_adsbOrder);
-    g_adsb.setApiKey(g_adsbKey.c_str());
-    ADSB_LOG("[adsb] adsb.lol API key at boot: %s\n", g_adsb.apiKeyDesc());
+    {
+        // adsb.lol support was removed: do not leave its API key sitting in flash, and
+        // move the feed order to its new key so the old numbering cannot be misread.
+        Preferences q;
+        q.begin("capsuleradar", false);
+        if (q.isKey("adsbkey")) q.remove("adsbkey");
+        if (q.isKey("adsborder")) { q.putInt("feedorder", g_adsbOrder); q.remove("adsborder"); }
+        q.end();
+    }
     // fonts are baked into the widgets at creation time, so the large-text flag must be
     // in place before display::begin() builds the UI (loadSettings runs first in setup)
     ui_set_large_text(g_bigText);
@@ -932,13 +930,6 @@ static void handleRoot() {
     // slack is free. The check after snprintf reports if this ever stops being enough.
     // Raised from 26624: the page had grown to ~24.6 KB, which is too little slack to
     // add anything to without silently losing the end of the form.
-    // The key field never echoes the key back into the page; it only says whether one
-    // is saved and shows its last four characters so you can tell which.
-    String adsbKeyHint = "paste your adsb.lol key (sk-lol-...)";
-    if (g_adsbKey.length())
-        adsbKeyHint = String("key saved (ends ...") +
-                      g_adsbKey.substring(g_adsbKey.length() > 4 ? g_adsbKey.length() - 4 : 0) +
-                      ") - paste a new one to replace";
     static const size_t BUFSZ = 40960;   // grows with the page; snprintf would silently truncate
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
@@ -1075,15 +1066,6 @@ static void handleRoot() {
         "<div style='font-size:12px;opacity:.6;margin-top:6px'>Free key from "
         "<a href='https://aisstream.io' style='color:#9affc8'>aisstream.io</a>. "
         "Coverage is crowd-sourced, so inland locations may see nothing.</div></div>"
-        "<div class=card><div class=t>adsb.lol API key</div>"
-        "<label>Key for re-api.adsb.lol (required to use adsb.lol)</label>"
-        "<input type=password autocomplete=off placeholder='%s' onchange='kk(this.value)'>"
-        "<button type=button class=w style='margin-top:10px' onclick='kk(\"\")'>Remove key</button>"
-        "<div style='font-size:12px;opacity:.6;margin-top:6px'>Feeders get a key from "
-        "<a href='https://adsb.lol' style='color:#9affc8'>adsb.lol</a>. It is sent as "
-        "<i>x-api-key</i>. adsb.lol no longer answers without a key, so with none saved "
-        "the radar skips it and uses airplanes.live and adsb.fi. A feeder key keeps "
-        "working; a 30-day key stops when it expires.</div></div>"
         "<div class=card><div class=t>Local ADS-B receiver</div>"
         "<label>Hostname or IP (blank = use the public feeds)</label>"
         "<input value='%s' placeholder='192.168.1.50 or myreceiver.local' onchange='lf(this.value)'>"
@@ -1220,7 +1202,6 @@ static void handleRoot() {
         "function lf(v){fetch('/adsblocal?h='+encodeURIComponent(v))}"
         "function ls(v){fetch('/adsblocal?m='+v)}"
         "function lo(v){fetch('/adsblocal?o='+v)}"
-        "function kk(v){fetch('/adsblocal?key='+encodeURIComponent(v)).then(()=>location.reload())}"
         "function mb(c){fetch('/map?v='+(c?1:0)+'&save=1')}"
 #if BOARD_HAS_SD
         "function se(c){fetch('/sdenable?v='+(c?1:0)).then(r=>r.text()).then(t=>alert('microSD '+t))}"
@@ -1269,7 +1250,6 @@ static void handleRoot() {
         npopts.c_str(), epopts.c_str(), popts.c_str(),
         sndStatus,
         tmopts.c_str(), g_aisKey.c_str(),
-        adsbKeyHint.c_str(),
         g_adsbLocal.c_str(), srcopts.c_str(), orderopts.c_str(),
         qopts.c_str(), g_qhStart / 60, g_qhStart % 60, g_qhEnd / 60, g_qhEnd % 60,
         updater_auto_check() ? "checked" : "", updater_auto_install() ? "checked" : "",
@@ -1642,21 +1622,9 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         g_adsb.setPublicOrder(g_adsbOrder);
         Preferences p;
         p.begin("capsuleradar", false);
-        p.putInt("adsborder", g_adsbOrder);
+        p.putInt("feedorder", g_adsbOrder);
         p.end();
         ADSB_LOG("[adsb] internet source order: %s\n", AdsbClient::orderLabel(g_adsbOrder));
-    }
-    if (g_web.hasArg("key")) {                    // adsb.lol API key (empty = remove)
-        g_adsbKey = g_web.arg("key");
-        g_adsbKey.trim();
-        g_adsb.setApiKey(g_adsbKey.c_str());
-        Preferences p;
-        p.begin("capsuleradar", false);
-        p.putString("adsbkey", g_adsbKey);
-        p.end();
-        // Never log the key itself -- the serial log gets pasted into chats and issues.
-        ADSB_LOG("[adsb] adsb.lol API key %s (now using %s)\n", g_adsbKey.length() ? "saved" : "removed",
-                 g_adsb.apiKeyDesc());
     }
     g_web.send(200, "text/plain", "ok");
 }

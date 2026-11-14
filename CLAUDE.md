@@ -41,7 +41,7 @@ Wiki: https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.75
 `GET https://api.airplanes.live/v2/point/{lat}/{lon}/{radius_nm}`
 Returns JSON with an aircraft array (key `ac`, readsb format). Fields we use: `hex`, `flight`, `lat`, `lon`, `alt_baro`, `track`/`true_heading`, `gs`, `baro_rate`, `squawk`, `seen_pos`.
 - **Educational / non-commercial use only** — that's exactly this project. Be polite: ~1 request / 1–2 s, set a descriptive User-Agent.
-- Fallback: **adsb.lol** (`https://api.adsb.lol/v2/point/...`, same format).
+- Fallback: **adsb.fi** (`https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{nm}`, same aircraft format). The order is set on the config page.
 - Avoid OpenSky for now (OAuth2 + tighter limits, awkward on-device).
 
 ## Architecture (full detail in docs/ARCHITECTURE.md)

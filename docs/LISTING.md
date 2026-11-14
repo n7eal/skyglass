@@ -34,7 +34,7 @@ engraved logo. No soldering — the Waveshare board carries all the electronics.
 
 **Live air traffic**
 - Real aircraft from a free ADS-B feed ([airplanes.live](https://airplanes.live), with
-  [adsb.lol](https://adsb.lol) as a fallback), refreshed every couple of seconds.
+  [adsb.fi](https://adsb.fi) as a fallback), refreshed every couple of seconds.
 - Aircraft are drawn as glyphs **rotated by their heading** and **colour-coded by
   altitude**, with fading trails and an animated radar sweep.
 - Out-of-range traffic appears as **edge markers pointing in its direction**.

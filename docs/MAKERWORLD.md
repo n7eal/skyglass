@@ -47,7 +47,7 @@ ring around the bezel, a printed crown/button on top, a side USB-C port, an inte
 speaker, a small kickstand foot, and an engraved logo. Snap-/screw-together, no soldering.
 
 ### Features
-- 🛩️ **Live traffic** from a free ADS-B feed (airplanes.live, fallback adsb.lol),
+- 🛩️ **Live traffic** from a free ADS-B feed (airplanes.live, fallback adsb.fi),
   refreshed every couple of seconds.
 - 👆 **Touch**: tap an aircraft → full detail card + **route** (origin → destination).
   Swipe between **Radar / List / Stats** views.

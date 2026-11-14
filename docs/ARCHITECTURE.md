@@ -1,7 +1,7 @@
 # Architecture
 
 ## Concurrency model
-- **`adsb_task` (pinned to core 0)**: maintains WiFi, fetches the feed every `POLL_INTERVAL_MS`, parses it, and atomically swaps the result into a shared `std::vector<Aircraft>` protected by `g_ac_mutex`. Handles failover (airplanes.live → adsb.lol), backoff on error, and marks/expires stale entries by `seen_pos`.
+- **`adsb_task` (pinned to core 0)**: maintains WiFi, fetches the feed every `POLL_INTERVAL_MS`, parses it, and atomically swaps the result into a shared `std::vector<Aircraft>` protected by `g_ac_mutex`. Handles failover (airplanes.live ↔ adsb.fi, order set on the config page), backoff on error, and marks/expires stale entries by `seen_pos`.
 - **Render loop (core 1 / Arduino `loop()`)**: drives `lv_timer_handler()`, copies the aircraft snapshot under the mutex, and renders the active view. No blocking calls here.
 
 ```

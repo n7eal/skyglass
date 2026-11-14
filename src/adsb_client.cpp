@@ -1,4 +1,5 @@
-// Fetch nearby aircraft from adsb.lol's re-api (fallback: airplanes.live) and parse the
+// Fetch nearby aircraft from airplanes.live and adsb.fi (order set on the config page),
+// or from a receiver on the local network, and parse the
 // readsb JSON into a vector<Aircraft>.
 //
 // Memory safety (important on the ESP32): we parse straight from the HTTP stream
@@ -14,75 +15,6 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>   // v7
 #include <esp_heap_caps.h>
-#include <WiFiUdp.h>
-#include <esp_random.h>
-
-// Minimal DNS A-record lookup, straight to the network's DNS server. lwIP's own resolver
-// returns a single address (and caches it), so it cannot tell us about the other servers
-// behind a name. Returns the number of IPv4 addresses written to `out`, or -1.
-static int dns_query_a(const char *name, const IPAddress &server, uint32_t *out, int max) {
-    uint8_t q[300];
-    size_t n = 0;
-    const uint16_t id = (uint16_t)esp_random();
-    q[n++] = id >> 8; q[n++] = id & 0xFF;
-    q[n++] = 0x01; q[n++] = 0x00;                  // standard query, recursion desired
-    q[n++] = 0; q[n++] = 1;                        // one question
-    memset(q + n, 0, 6); n += 6;                   // no answer/authority/additional
-    for (const char *p = name; *p;) {
-        const char *dot = strchr(p, '.');
-        const size_t len = dot ? (size_t)(dot - p) : strlen(p);
-        if (len == 0 || len > 63 || n + len + 6 > sizeof(q)) return -1;
-        q[n++] = (uint8_t)len;
-        memcpy(q + n, p, len); n += len;
-        p += len;
-        if (*p == '.') ++p;
-    }
-    q[n++] = 0;
-    q[n++] = 0; q[n++] = 1;                        // QTYPE  A
-    q[n++] = 0; q[n++] = 1;                        // QCLASS IN
-
-    WiFiUDP udp;
-    if (!udp.begin(0)) return -1;
-    if (!udp.beginPacket(server, 53)) { udp.stop(); return -1; }
-    udp.write(q, n);
-    if (!udp.endPacket()) { udp.stop(); return -1; }
-    uint8_t r[512];
-    int len = 0;
-    const uint32_t t0 = millis();
-    while (millis() - t0 < 1500) {
-        if (udp.parsePacket() > 0) { len = udp.read(r, sizeof(r)); break; }
-        delay(10);
-    }
-    udp.stop();
-    if (len < 12 || r[0] != q[0] || r[1] != q[1] || (r[3] & 0x0F) != 0) return -1;
-
-    const int qd = (r[4] << 8) | r[5];
-    const int an = (r[6] << 8) | r[7];
-    int i = 12;
-    auto skipName = [&](int &at) -> bool {
-        while (at < len) {
-            const uint8_t b = r[at];
-            if (b == 0) { ++at; return true; }
-            if ((b & 0xC0) == 0xC0) { at += 2; return true; }   // compression pointer
-            at += b + 1;
-        }
-        return false;
-    };
-    for (int k = 0; k < qd; ++k) { if (!skipName(i)) return -1; i += 4; }
-    int cnt = 0;
-    for (int k = 0; k < an && i < len; ++k) {
-        if (!skipName(i) || i + 10 > len) break;
-        const uint16_t type = (r[i] << 8) | r[i + 1];
-        const uint16_t rdl  = (r[i + 8] << 8) | r[i + 9];
-        i += 10;
-        if (i + rdl > len) break;
-        if (type == 1 && rdl == 4 && cnt < max)
-            out[cnt++] = (uint32_t)IPAddress(r[i], r[i + 1], r[i + 2], r[i + 3]);
-        i += rdl;
-    }
-    return cnt;
-}
-
 // Parse the JSON in PSRAM, not internal RAM. Otherwise the per-poll JSON alloc/free
 // churn fragments the internal heap and, after a while, mbedTLS can't find a large
 // enough contiguous block for the TLS handshake (-32512), freezing the feed.
@@ -128,29 +60,19 @@ private:
     size_t _bytesRead = 0;
 };
 
-// Every ordering of the three feeds. Index = setPublicOrder() value; 0 and 1 match the
-// old two-feed settings so a saved choice keeps its meaning.
+// Each ordering of the internet feeds. Index = setPublicOrder() value.
 static const uint8_t kOrders[][AdsbClient::SRC_COUNT] = {
-    { AdsbClient::SRC_REAPI,     AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_ADSBFI },
-    { AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_REAPI,     AdsbClient::SRC_ADSBFI },
-    { AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_REAPI,     AdsbClient::SRC_AIRPLANES },
-    { AdsbClient::SRC_REAPI,     AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_AIRPLANES },
-    { AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_REAPI },
-    { AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_REAPI },
+    { AdsbClient::SRC_AIRPLANES, AdsbClient::SRC_ADSBFI },
+    { AdsbClient::SRC_ADSBFI,    AdsbClient::SRC_AIRPLANES },
 };
 static const char *const kOrderLabels[] = {
-    "adsb.lol, airplanes.live, adsb.fi",
-    "airplanes.live, adsb.lol, adsb.fi",
-    "adsb.fi, adsb.lol, airplanes.live",
-    "adsb.lol, adsb.fi, airplanes.live",
-    "airplanes.live, adsb.fi, adsb.lol",
-    "adsb.fi, airplanes.live, adsb.lol",
+    "airplanes.live, adsb.fi",
+    "adsb.fi, airplanes.live",
 };
-static const char *const kSrcHost[AdsbClient::SRC_COUNT] = { ADSB_REAPI_HOST, ADSB_FALLBACK_HOST, ADSB_FI_HOST };
+static const char *const kSrcHost[AdsbClient::SRC_COUNT] = { ADSB_AIRPLANES_HOST, ADSB_FI_HOST };
 
 int AdsbClient::orderCount() { return (int)(sizeof(kOrders) / sizeof(kOrders[0])); }
 const char *AdsbClient::orderLabel(int o) { return (o >= 0 && o < orderCount()) ? kOrderLabels[o] : "?"; }
-bool AdsbClient::reapiFirst() const { return kOrders[_publicOrder][0] == SRC_REAPI && _apiKey.length(); }
 
 // Retry-After is either delay-seconds or an HTTP-date. Only the seconds form is parsed;
 // a date (or anything else) returns 0 and the caller uses ADSB_429_DEFAULT_S.
@@ -169,16 +91,6 @@ static uint32_t parse_retry_after(const String &v) {
 
 void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
     _lat = homeLat; _lon = homeLon; _rangeKm = rangeKm;
-}
-
-void AdsbClient::setApiKey(const char* k) {
-    _apiKey = k ? k : "";
-    _apiKey.trim();
-    _reapiBackoff = false;                 // a new key deserves an immediate try
-    _noKeyLogged = false;
-    const unsigned len = _apiKey.length();
-    if (len) snprintf(_keyDesc, sizeof(_keyDesc), "key ...%s", _apiKey.c_str() + (len > 4 ? len - 4 : 0));
-    else     snprintf(_keyDesc, sizeof(_keyDesc), "no key");
 }
 
 bool AdsbClient::poll(std::vector<Aircraft>& out) {
@@ -211,14 +123,8 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     _lastWasLocal = false;
     if (_srcMode == 1) return false;          // local-only with no host configured
 
-    // Public sources in priority order. re-api is only offered while its rate window is
-    // open. The gate lives here rather than in the caller so that nothing -- a zoom
-    // re-query, a failed local poll, a retry -- can push it past 10 requests/minute.
+    // Public sources, in the order chosen on the config page.
     const uint32_t nowMs = millis();
-    if (_reapiBackoff && nowMs - _reapiBackoffStart >= _reapiBackoffDur)
-        _reapiBackoff = false;
-    const bool reapiDue = !_reapiBackoff &&
-                          (!_reapiArmed || nowMs - _reapiLastMs >= ADSB_REAPI_MIN_INTERVAL_MS);
 
     // Release any 429 holds whose Retry-After has run out.
     for (int s = 0; s < SRC_COUNT; ++s)
@@ -233,16 +139,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     for (int k = 0; k < SRC_COUNT; ++k) {
         const int s = kOrders[_publicOrder][k];
         if (_hold[s]) continue;                              // told to wait (429)
-        if (s == SRC_REAPI && !_apiKey.length()) {          // keyless requests get 401 now
-            if (!_noKeyLogged) {
-                _noKeyLogged = true;
-                ADSB_LOG("[adsb] adsb.lol needs an API key (config page); skipping it\n");
-            }
-            continue;
-        }
-        if (s == SRC_REAPI && !reapiDue) continue;           // rate gate / refusal backoff
-        const FeedKind kind = (s == SRC_REAPI) ? FeedKind::ReApi
-                            : (s == SRC_ADSBFI) ? FeedKind::AdsbFi : FeedKind::Point;
+        const FeedKind kind = (s == SRC_ADSBFI) ? FeedKind::AdsbFi : FeedKind::Point;
         srcs[n++] = { kSrcHost[s], kind, s };
     }
 
@@ -260,10 +157,6 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     for (int i = 0; i < n; ++i) {
         if (anyOk && (s_emptyStreak % ADSB_EMPTY_RECHECK_POLLS) != 0) break;
 
-        if (srcs[i].kind == FeedKind::ReApi) {     // the attempt itself counts toward the limit
-            _reapiArmed = true;
-            _reapiLastMs = nowMs;
-        }
         std::vector<Aircraft> list;
         const bool ok = fetchFrom(srcs[i].host, list, srcs[i].kind);
 
@@ -277,36 +170,11 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             _holdDur[srcs[i].id] = sec * 1000UL;
             char d[16];
             if (_lastRetryAfterS)
-                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, Retry-After %u s); holding off %s, using the other feeds\n",
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, Retry-After %u s); holding off %s, using the other feed\n",
                          srcs[i].host, (unsigned)_lastRetryAfterS, fmt_dur(sec, d, sizeof(d)));
             else
-                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %s, using the other feeds\n",
+                ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %s, using the other feed\n",
                          srcs[i].host, fmt_dur(sec, d, sizeof(d)));
-        } else if (srcs[i].kind == FeedKind::ReApi && !ok &&
-            (_lastHttpCode == 403 || _lastHttpCode == 401)) {
-            _reapiBackoff = true;
-            _reapiBackoffStart = nowMs;
-            _reapiBackoffDur = ADSB_REAPI_BACKOFF_MS;
-            char d[16];
-            ADSB_LOG("[adsb] %s refused (HTTP %d, sent %s)%s; resting it for %s (saving a key retries now)\n",
-                          ADSB_REAPI_HOST, _lastHttpCode, _keyDesc,
-                          _apiKey.length() ? " -- check the adsb.lol API key on the config page"
-                                           : " -- adsb.lol needs an API key",
-                          fmt_dur(ADSB_REAPI_BACKOFF_MS / 1000, d, sizeof(d)));
-        } else if (srcs[i].kind == FeedKind::ReApi && !ok && !reapiHasGoodIp(nowMs)) {
-            // Connection error, TLS failure or a reply slower than ADSB_FETCH_DEADLINE_MS,
-            // and no healthy server left to try. With a server list, every one has now
-            // failed: rest for minutes rather than knocking on a dead server (a 6 s
-            // timeout) every 20 s. Without a list (DNS failed), keep the short rest.
-            const bool allDown = _reapiNIps > 0;
-            _reapiBackoff = true;
-            _reapiBackoffStart = nowMs;
-            _reapiBackoffDur = allDown ? ADSB_REAPI_ALLDOWN_BACKOFF_MS : ADSB_REAPI_SLOW_BACKOFF_MS;
-            char d[16];
-            ADSB_LOG("[adsb] %s (%s) %s after %u ms%s; using the other feeds for %s\n",
-                     ADSB_REAPI_HOST, _reapiIp, _lastTooSlow ? "too slow" : "failed",
-                     (unsigned)_lastFetchMs, allDown ? ", and every server has failed" : "",
-                     fmt_dur(_reapiBackoffDur / 1000, d, sizeof(d)));
         }
 
         if (ok && !list.empty()) {
@@ -333,73 +201,6 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     return false;
 }
 
-void AdsbClient::refreshReapiIps(uint32_t now) {
-    if (_reapiNIps && now - _reapiIpsAt < ADSB_REAPI_IP_REFRESH_MS) return;
-    _reapiIpsAt = now;
-    uint32_t ips[kReapiMaxIps];
-    int n = -1;
-    const IPAddress dns = WiFi.dnsIP(0);
-    if ((uint32_t)dns != 0) n = dns_query_a(ADSB_REAPI_HOST, dns, ips, kReapiMaxIps);
-    if (n <= 0) {                                   // fall back to the system resolver
-        IPAddress ip;
-        if (WiFi.hostByName(ADSB_REAPI_HOST, ip) == 1) { ips[0] = (uint32_t)ip; n = 1; }
-    }
-    if (n <= 0) return;                             // keep whatever list we had
-
-    // Carry "bad" marks over for servers still in the new list.
-    bool bad[kReapiMaxIps] = {};
-    uint32_t since[kReapiMaxIps] = {};
-    for (int i = 0; i < n; ++i)
-        for (int j = 0; j < _reapiNIps; ++j)
-            if (ips[i] == _reapiIps[j]) { bad[i] = _reapiBad[j]; since[i] = _reapiBadSince[j]; }
-    const bool changed = (n != _reapiNIps) || memcmp(ips, _reapiIps, n * sizeof(uint32_t)) != 0;
-    memcpy(_reapiIps, ips, n * sizeof(uint32_t));
-    memcpy(_reapiBad, bad, sizeof(bad));
-    memcpy(_reapiBadSince, since, sizeof(since));
-    _reapiNIps = n;
-    if (_reapiCur >= n) _reapiCur = 0;
-    if (changed) {
-        char list[8 * 17] = "";
-        for (int i = 0; i < n; ++i) {
-            strncat(list, " ", sizeof(list) - strlen(list) - 1);
-            strncat(list, IPAddress(_reapiIps[i]).toString().c_str(), sizeof(list) - strlen(list) - 1);
-        }
-        ADSB_LOG("[adsb] %s servers:%s\n", ADSB_REAPI_HOST, list);
-    }
-}
-
-// Prefer the server that last worked; skip any marked bad until their time is up.
-int AdsbClient::pickReapiIp(uint32_t now) {
-    if (!_reapiNIps) return -1;
-    for (int k = 0; k < _reapiNIps; ++k) {
-        const int i = (_reapiCur + k) % _reapiNIps;
-        if (_reapiBad[i] && now - _reapiBadSince[i] >= ADSB_REAPI_IP_BAD_MS) _reapiBad[i] = false;
-        if (!_reapiBad[i]) { _reapiCur = i; return i; }
-    }
-    // Every server is marked bad: give the next one another chance rather than none.
-    _reapiCur = (_reapiCur + 1) % _reapiNIps;
-    _reapiBad[_reapiCur] = false;
-    return _reapiCur;
-}
-
-bool AdsbClient::reapiHasGoodIp(uint32_t now) const {
-    for (int i = 0; i < _reapiNIps; ++i)
-        if (!_reapiBad[i] || now - _reapiBadSince[i] >= ADSB_REAPI_IP_BAD_MS) return true;
-    return false;
-}
-
-void AdsbClient::markReapiIp(bool ok) {
-    const int i = _reapiCurIdx;
-    _reapiCurIdx = -1;
-    if (i < 0 || i >= _reapiNIps) return;
-    if (ok) { _reapiBad[i] = false; return; }
-    _reapiBad[i] = true;
-    _reapiBadSince[i] = millis();
-    _reapiCur = (i + 1) % _reapiNIps;              // next request goes elsewhere
-    ADSB_LOG("[adsb] re-api server %s not answering; skipping it for %u min\n",
-             _reapiIp, (unsigned)(ADSB_REAPI_IP_BAD_MS / 60000));
-}
-
 bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKind kind) {
     const bool local = (kind == FeedKind::Local);
     _lastHttpCode = 0;
@@ -419,9 +220,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     } else {
         double nm = ceil((double)_rangeKm * 0.539957);              // km -> nautical miles (rounded up)
         if (nm < 1.0) nm = 1.0;
-        if (kind == FeedKind::ReApi)
-            snprintf(url, sizeof(url), "https://%s/?circle=%.5f,%.5f,%.0f", host, _lat, _lon, nm);
-        else if (kind == FeedKind::AdsbFi)
+        if (kind == FeedKind::AdsbFi)
             snprintf(url, sizeof(url), "https://%s/api/v3/lat/%.4f/lon/%.4f/dist/%.0f",
                      host, _lat, _lon, nm > 250.0 ? 250.0 : nm);
         else
@@ -439,40 +238,12 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
 
     if (!local) _client.setHandshakeTimeout(ADSB_TLS_HANDSHAKE_S);   // default is 120 s
-    _reapiCurIdx = -1;
-    if (kind == FeedKind::ReApi) {
-        // Connect to a specific re-api server ourselves (TLS still uses the host name for
-        // SNI), so a dead one can be skipped. HTTPClient sees the open connection and
-        // reuses it (setReuse(true) above) instead of resolving the name again.
-        const uint32_t now = millis();
-        refreshReapiIps(now);
-        const int idx = pickReapiIp(now);
-        if (idx >= 0) {
-            const IPAddress ip(_reapiIps[idx]);
-            snprintf(_reapiIp, sizeof(_reapiIp), "%s", ip.toString().c_str());
-            _reapiCurIdx = idx;
-            _client.stop();
-            _client.setConnectionTimeout(6000);
-            if (!_client.connect(ip, 443, host, nullptr, nullptr, nullptr)) {
-                _lastHttpCode = -1;
-                ADSB_LOG("[adsb] could not connect to re-api server %s after %u ms\n",
-                         _reapiIp, (unsigned)(millis() - t0));
-                markReapiIp(false);
-                _client.stop();
-                return false;
-            }
-        } else {
-            snprintf(_reapiIp, sizeof(_reapiIp), "DNS-fail");   // fall back to connect-by-name
-        }
-    }
     if (!_http.begin(local ? (WiFiClient &)_plain : (WiFiClient &)_client, url)) {
         ADSB_LOG("[adsb] begin failed (%s)\n", host);
         if (local) _plain.stop(); else _client.stop();
         return false;
     }
     _http.setUserAgent(ADSB_USER_AGENT);
-    // begin() clears custom headers, so this is added fresh on every request.
-    if (kind == FeedKind::ReApi && _apiKey.length()) _http.addHeader("x-api-key", _apiKey);
     _http.addHeader("Accept", "application/json");
     // adsb.fi sends HTTP/1.1 replies chunked, and we parse straight from the raw stream,
     // which still carries the chunk-size lines: ArduinoJson read the leading "1f4a" as the
@@ -493,11 +264,6 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
-        if (kind == FeedKind::ReApi) {
-            ADSB_LOG("[adsb]   that re-api request went to %s, sent with %s\n", _reapiIp, _keyDesc);
-            if (code < 0) markReapiIp(false);     // transport failure: try another server
-            else          markReapiIp(true);      // the server answered (an HTTP error is not its fault)
-        }
         _http.end();
         _client.stop();
         return false;
@@ -521,7 +287,6 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
                                                DeserializationOption::Filter(filter));
     if (err && jsonStream.expired()) {
         _lastTooSlow = true;
-        if (kind == FeedKind::ReApi) markReapiIp(false);
         ADSB_LOG("[adsb] %s too slow: gave up after %u ms with %u of %d bytes\n",
                  host, (unsigned)(millis() - t0), (unsigned)jsonStream.bytesRead(), expectedBytes);
         _http.end();
@@ -538,7 +303,6 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, FeedKin
     }
     _http.end();
     _client.stop();
-    if (kind == FeedKind::ReApi) markReapiIp(true);
 
     JsonArrayConst arr = doc["ac"].as<JsonArrayConst>();
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();

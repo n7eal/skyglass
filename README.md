@@ -66,7 +66,7 @@ own controls — the range button, the TRACK button — follow whichever theme i
 
 ### Traffic
 - **Live ADS-B** from [airplanes.live](https://airplanes.live) (free, non-commercial), falling
-  back to [adsb.lol](https://api.adsb.lol). Polled every couple of seconds through a
+  back to [adsb.fi](https://adsb.fi). Polled every couple of seconds through a
   memory-safe streaming parser with a hard aircraft cap. An empty sky is normal, so the
   fallback backs off rather than doubling the request rate against both feeds all night.
 - **Aircraft icons by type**: the ICAO type code picks a silhouette — swept-wing jets in three
@@ -301,7 +301,7 @@ src/
   aircraft_types.*   ICAO type designator -> drawing silhouette
   ui.*               views (radar/list/stats/weather/tracked/clock/about), cards, HUD
   touch_cst9217.*    capacitive touch (single touch + 2-point pinch)
-  adsb_client.*      airplanes.live / adsb.lol fetch + parse
+  adsb_client.*      airplanes.live / adsb.fi fetch + parse
   photo.* photo_client.*        airframe photos (planespotters)
   route*.* route.*              origin -> destination lookup (adsbdb)
   airline.*                     operator name (offline table)
@@ -339,7 +339,7 @@ Related work worth knowing about:
 
 **Firmware / code: [MIT](LICENSE)** — fork and build on it freely, keeping the notice.
 
-Aircraft data: **airplanes.live** and **adsb.lol** (free, **non-commercial / educational** — be
+Aircraft data: **airplanes.live** and **adsb.fi** (free, **non-commercial / educational** — be
 polite with request cadence). Routes: **adsbdb.com**. Airframe photos: **planespotters.net**,
 proxied through **images.weserv.nl** for baseline-JPEG re-encoding; each photo is credited to its
 photographer on the card and remains the property of its owner. Basemap tiles: **CARTO** /

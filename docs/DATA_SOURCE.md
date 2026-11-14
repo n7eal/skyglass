@@ -28,8 +28,8 @@ JSON object; the aircraft list is under key **`ac`** (older/raw readsb files use
 | `t` / `type`   | aircraft type (e.g. B738) when present   | detail card |
 | `dbFlags`      | bitfield (military, etc.)                | "interesting" alerts |
 
-### Fallback: adsb.lol
-Same readsb format. `GET https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`. Wire it as an automatic failover if airplanes.live errors/times out.
+### Fallback: adsb.fi
+Same aircraft format (`ac` list). `GET https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{radius_nm}` (max 250 NM, no key, 1 request/s; personal non-commercial use, credit adsb.fi). Used automatically when airplanes.live errors, times out or answers 429; the config page can swap which of the two is tried first. The reply is chunked under HTTP/1.1, so the client requests HTTP/1.0.
 
 ### Not used: OpenSky
 Now requires OAuth2 client-credentials and has tighter anonymous limits — awkward for an always-on embedded device. Keep as a documented alternative only.
