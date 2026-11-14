@@ -34,8 +34,13 @@ public:
     // 0 = auto (local first, public feeds if it does not answer)
     // 1 = local only  -- shows exactly what your antenna hears, never masked by the APIs
     // 2 = public only -- ignore the receiver even when it is up
+    // 3 = auto, internet first -- the receiver is the last resort, used only when no
+    //     internet feed answered (errors, or every feed on hold)
     void setSourceMode(int m) { _srcMode = m; }
     int  sourceMode() const { return _srcMode; }
+    // True when each poll starts with the internet feeds (so the caller must keep the
+    // rate-limited cadence), even if the last answer came from the local receiver.
+    bool internetFirst() const { return _srcMode == 3 || !_lastWasLocal; }
     const char* localHost() const { return _localHost.c_str(); }
 
     // Internet feeds, and the order they are tried in (config page "Internet source order").

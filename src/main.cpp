@@ -134,7 +134,7 @@ static bool                  g_time24 = false;                       // false = 
 static bool                  g_typeIcons = true;                     // per-type aircraft silhouettes (web/NVS)
 static int                   g_trafficMode = 0;                      // 0 = aircraft, 1 = marine (web/NVS)
 static int                   g_adsbOrder = 0;                        // internet feed order (see AdsbClient::setPublicOrder)
-static int                   g_adsbSrc = 0;                          // 0 auto, 1 local only, 2 public only
+static int                   g_adsbSrc = 0;                          // 0 auto (receiver first), 1 local only, 2 public only, 3 auto (internet first)
 static String                g_adsbLocal;                            // dump1090/tar1090 host on the LAN ("" = public feeds)
 static String                g_aisKey;                               // aisstream.io API key (web/NVS; empty = off)
 static volatile bool         g_weatherDirty = false;
@@ -290,7 +290,7 @@ static void adsb_task(void*) {
         // keeps polling. Leaving the clock polls at once.
         {
             const bool wantPause = ui_clock_shown_ms() >= CLOCK_FEED_PAUSE_MS &&
-                                   !g_adsb.lastPollWasLocal();
+                                   g_adsb.internetFirst();
             if (wantPause != g_feedPaused) {
                 g_feedPaused = wantPause;
                 if (wantPause) {
@@ -349,7 +349,7 @@ static void adsb_task(void*) {
             // The public feeds are rate-limited, so only a local receiver that is answering
             // keeps the fast cadence.
             const uint32_t publicMin = ADSB_PUBLIC_POLL_MS;
-            if (!g_adsb.lastPollWasLocal() && pollInterval < publicMin)
+            if (g_adsb.internetFirst() && pollInterval < publicMin)
                 pollInterval = publicMin;
             if (!g_feedPaused && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed
                 lastPoll = nowMs;
@@ -798,10 +798,15 @@ static void handleRoot() {
     // ADS-B source selector: auto prefers the local receiver but survives it going away.
     String srcopts;
     {
-        static const char *kSrc[3] = { "Auto (receiver, then internet)",
+        // Index = AdsbClient::setSourceMode value (the stored setting), so new modes are
+        // appended; the dropdown lists them in this display order.
+        static const char *kSrc[4] = { "Auto (receiver, then internet)",
                                        "Local receiver only",
-                                       "Internet feeds only" };
-        for (int i = 0; i < 3; ++i) {
+                                       "Internet feeds only",
+                                       "Auto (internet, then receiver)" };
+        static const int kSrcShow[4] = { 0, 3, 1, 2 };
+        for (int k = 0; k < 4; ++k) {
+            const int i = kSrcShow[k];
             srcopts += "<option value='" + String(i) + "'";
             if (g_adsbSrc == i) srcopts += " selected";
             srcopts += ">" + String(kSrc[i]) + "</option>";
@@ -1600,7 +1605,7 @@ static void handleAis() {   // traffic mode (aircraft vs marine) + aisstream.io 
 
 static void handleAdsbLocal() {   // point the feed at a receiver on the local network
     if (g_web.hasArg("m")) {
-        g_adsbSrc = constrain((int)g_web.arg("m").toInt(), 0, 2);
+        g_adsbSrc = constrain((int)g_web.arg("m").toInt(), 0, 3);
         g_adsb.setSourceMode(g_adsbSrc);
         Preferences p;
         p.begin("capsuleradar", false);

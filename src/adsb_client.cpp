@@ -101,7 +101,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
 
     // Your own receiver wins whenever it is configured and answering: no internet round
     // trip, sub-second data, and it shows whatever your antenna hears.
-    if (_localHost.length() && _srcMode != 2) {
+    if (_localHost.length() && _srcMode != 2 && _srcMode != 3) {
         std::vector<Aircraft> localList;
         const bool ok = fetchFrom(_localHost.c_str(), localList, FeedKind::Local);
         if (ok && !localList.empty()) {
@@ -205,6 +205,22 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         _lastSource = emptyHost;
         out.swap(emptyList);
         return true;
+    }
+
+    // Internet-first auto: no internet feed answered (each one errored, or is on hold),
+    // so fall back to the receiver on the local network. An internet feed that answered
+    // with an empty sky is a real answer and does not come here.
+    if (_srcMode == 3 && _localHost.length()) {
+        std::vector<Aircraft> localList;
+        if (fetchFrom(_localHost.c_str(), localList, FeedKind::Local)) {
+            if (!_lastWasLocal)
+                ADSB_LOG("[adsb] no internet feed answered; using the local receiver %s\n",
+                         _localHost.c_str());
+            _lastWasLocal = true;
+            _lastSource = _localHost.c_str();
+            out.swap(localList);
+            return true;
+        }
     }
     return false;
 }
