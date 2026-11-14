@@ -83,7 +83,7 @@ private:
     String _localHost;
     int    _publicOrder = 0;
     uint32_t _lastRetryAfterS = 0;       // Retry-After of the last 429 (0 = none sent)
-    // Per-feed hold after HTTP 429, honouring Retry-After.
+    // Per-feed hold: after HTTP 429 (honouring Retry-After) or a 401/403 refusal.
     bool     _hold[SRC_COUNT] = {};
     uint32_t _holdStart[SRC_COUNT] = {};
     uint32_t _holdDur[SRC_COUNT] = {};

@@ -85,6 +85,10 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // only collects more 429s. Capped at a day.
 #define ADSB_429_DEFAULT_S  60
 #define ADSB_429_MAX_S      86400
+// HTTP 401/403 from a feed: it is refusing us (airplanes.live does this to non-feeders, and
+// adsb.fi counts 4xx replies toward a temporary IP restriction). Asking again every poll
+// only deepens a block, so leave that feed alone this long and use the other.
+#define ADSB_REFUSED_HOLD_S 600      // 10 min
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
 // picture on; the ADSB Exchange and PiAware images both include tar1090.

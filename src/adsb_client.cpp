@@ -130,7 +130,7 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     for (int s = 0; s < SRC_COUNT; ++s)
         if (_hold[s] && nowMs - _holdStart[s] >= _holdDur[s]) {
             _hold[s] = false;
-            ADSB_LOG("[adsb] %s: Retry-After hold over, using it again\n", kSrcHost[s]);
+            ADSB_LOG("[adsb] %s: hold over, using it again\n", kSrcHost[s]);
         }
 
     struct Src { const char* host; FeedKind kind; int id; };
@@ -175,6 +175,14 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
             else
                 ADSB_LOG("[adsb] %s rate-limited (HTTP 429, no Retry-After); holding off %s, using the other feed\n",
                          srcs[i].host, fmt_dur(sec, d, sizeof(d)));
+        } else if (!ok && (_lastHttpCode == 403 || _lastHttpCode == 401)) {
+            // Refused outright. Retrying every poll only deepens a block.
+            _hold[srcs[i].id] = true;
+            _holdStart[srcs[i].id] = nowMs;
+            _holdDur[srcs[i].id] = ADSB_REFUSED_HOLD_S * 1000UL;
+            char d[16];
+            ADSB_LOG("[adsb] %s refused us (HTTP %d); holding off %s, using the other feed\n",
+                     srcs[i].host, _lastHttpCode, fmt_dur(ADSB_REFUSED_HOLD_S, d, sizeof(d)));
         }
 
         if (ok && !list.empty()) {
