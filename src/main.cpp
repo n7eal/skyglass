@@ -169,6 +169,13 @@ static const int TZOPTS_N = sizeof(TZOPTS) / sizeof(TZOPTS[0]);
 
 static float queryRadiusKm();   // defined below; the feed task needs it for the fire bbox
 
+// The feed task also fetches weather, rain radar, clouds and map tiles. Name any of them
+// that holds the task (and so the aircraft feed) up for more than a few seconds.
+static void feedStepSlow(const char *what, uint32_t t0) {
+    const uint32_t ms = millis() - t0;
+    if (ms >= 5000) sg_log("[feed] %s fetch held the feed task for %u ms\n", what, (unsigned)ms);
+}
+
 // ---- AIS task (core 0): pumps the aisstream.io WebSocket on its own ----
 // It used to be pumped from adsb_task between the HTTPS fetches, but on the P4 each of
 // those (aircraft, weather, radar, map tiles) can block for several seconds. The
@@ -408,22 +415,27 @@ static void adsb_task(void*) {
             }
             // Forecasts change slowly. Fetch only after the live ADS-B poll has had priority.
             if ((int32_t)(nowMs - nextWeatherAt) >= 0) {
-                Serial.printf("[weather] fetching %.5f, %.5f...\n",
-                              g_settings.homeLat, g_settings.homeLon);
+                sg_log("[weather] fetching %.5f, %.5f...\n", g_settings.homeLat, g_settings.homeLon);
                 WeatherSnapshot forecast;
-                if (weather_fetch(g_settings.homeLat, g_settings.homeLon, forecast)) {
+                const uint32_t tStep = millis();
+                const bool wOk = weather_fetch(g_settings.homeLat, g_settings.homeLon, forecast);
+                feedStepSlow("weather", tStep);
+                if (wOk) {
                     weather_store(forecast);
                     g_weatherDirty = true;
                     nextWeatherAt = millis() + WEATHER_REFRESH_MS;
-                    Serial.println("[weather] forecast updated");
+                    sg_log("[weather] forecast updated\n");
                 } else {
                     nextWeatherAt = millis() + 60000UL;
-                    Serial.println("[weather] fetch failed; retrying in 60s");
+                    sg_log("[weather] fetch failed; retrying in 60s\n");
                 }
             }
             if (g_wxRefetch) { g_wxRefetch = false; nextWxRadarAt = nowMs; }
             if ((int32_t)(nowMs - nextWxRadarAt) >= 0) {
-                if (wx_radar_fetch(g_settings.homeLat, g_settings.homeLon)) {
+                const uint32_t tStep = millis();
+                const bool rOk = wx_radar_fetch(g_settings.homeLat, g_settings.homeLon);
+                feedStepSlow("rain radar", tStep);
+                if (rOk) {
                     g_wxRadarDirty = true;
                     // One frame per call. While the loop's backlog is still coming down,
                     // come straight back for the next one -- the whole two-hour history is
@@ -432,20 +444,23 @@ static void adsb_task(void*) {
                     // ten minutes and the fetcher skips what it already holds.
                     const int left = wx_radar_backlog();
                     nextWxRadarAt = millis() + (left > 0 ? 2500UL : WX_RADAR_REFRESH_MS);
-                    if (left > 0) Serial.printf("[wxradar] %d frames to go\n", left);
+                    if (left > 0) sg_log("[wxradar] %d frames to go\n", left);
                 } else {
                     nextWxRadarAt = millis() + 60000UL;
-                    Serial.println("[wxradar] fetch failed; retrying in 60s");
+                    sg_log("[wxradar] fetch failed; retrying in 60s\n");
                 }
             }
             if ((int32_t)(nowMs - nextCloudImageAt) >= 0) {
-                Serial.println("[clouds] fetching EUMETSAT frame...");
-                if (cloud_image_fetch(g_settings.homeLat, g_settings.homeLon)) {
+                sg_log("[clouds] fetching EUMETSAT frame...\n");
+                const uint32_t tStep = millis();
+                const bool cOk = cloud_image_fetch(g_settings.homeLat, g_settings.homeLon);
+                feedStepSlow("clouds", tStep);
+                if (cOk) {
                     g_cloudImageDirty = true;
                     nextCloudImageAt = millis() + CLOUD_IMAGE_REFRESH_MS;
                 } else {
                     nextCloudImageAt = millis() + 60000UL;
-                    Serial.println("[clouds] fetch failed; retrying in 60s");
+                    sg_log("[clouds] fetch failed; retrying in 60s\n");
                 }
             }
             // AIS runs in its own task (ais_task) -- see there for why.
@@ -454,7 +469,9 @@ static void adsb_task(void*) {
             if (map_client_enabled()) {
                 static bool mapWasBusy = false;
                 map_client_request(g_settings.homeLat, g_settings.homeLon, g_settings.rangeKm);
+                const uint32_t tStep = millis();
                 const bool busy = map_client_step();
+                feedStepSlow("map tile", tStep);
                 // The commit happens on the step that finishes the build, and that step
                 // reports "no work left" — so flag the repaint on the busy->idle edge.
                 if (mapWasBusy && !busy) g_mapDirty = true;

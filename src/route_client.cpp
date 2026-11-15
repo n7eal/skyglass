@@ -201,6 +201,7 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
 
     WiFiClientSecure client;
     client.setInsecure();
+    client.setHandshakeTimeout(NET_TLS_HANDSHAKE_S);
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3000);   // short: runs on the feed task, don't stall the live poll
@@ -266,6 +267,7 @@ bool reg_fetch(const char *hex, char *reg, size_t rn, char *type, size_t tn) {
 
     WiFiClientSecure client;
     client.setInsecure();
+    client.setHandshakeTimeout(NET_TLS_HANDSHAKE_S);
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3000);      // shares the feed task; keep it short

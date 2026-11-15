@@ -41,6 +41,7 @@ bool net_fetch_psram(const char *url, const char *userAgent,
 
     WiFiClientSecure cli;
     cli.setInsecure();                        // hobby device (matches the other clients)
+    cli.setHandshakeTimeout(6);               // NET_TLS_HANDSHAKE_S; the default is 120 s
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(connectTimeoutMs);

@@ -84,6 +84,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
 
     WiFiClientSecure client;
     client.setInsecure();
+    client.setHandshakeTimeout(NET_TLS_HANDSHAKE_S);
     HTTPClient http;
     http.useHTTP10(true);                             // forces HTTP/1.0, disables chunked encoding
     http.setReuse(false);

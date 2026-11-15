@@ -38,6 +38,7 @@ static bool http_get(const char *url, uint8_t **out, size_t *outLen, size_t maxL
     *out = nullptr; *outLen = 0;
     WiFiClientSecure cli;
     cli.setInsecure();
+    cli.setHandshakeTimeout(NET_TLS_HANDSHAKE_S);
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3000);    // keep short: this runs on the feed task, a slow photo

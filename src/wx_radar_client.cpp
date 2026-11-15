@@ -194,6 +194,7 @@ public:
 static bool https_get_json(const char *url, JsonDocument &doc, int timeoutMs) {
     WiFiClientSecure client;
     client.setInsecure();
+    client.setHandshakeTimeout(NET_TLS_HANDSHAKE_S);
     HTTPClient http;
     http.useHTTP10(true);
     http.setReuse(false);

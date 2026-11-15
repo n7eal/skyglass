@@ -134,6 +134,7 @@ public:
 static void do_check(void) {
     WiFiClientSecure cli;
     cli.setInsecure();
+    cli.setHandshakeTimeout(10);              // default is 120 s
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(4000);
@@ -191,6 +192,7 @@ static void do_install(void) {
 
     WiFiClientSecure cli;
     cli.setInsecure();
+    cli.setHandshakeTimeout(10);              // default is 120 s
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(5000);

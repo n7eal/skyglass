@@ -72,6 +72,11 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // they resume the moment another screen is shown. A local receiver keeps polling.
 #define CLOCK_FEED_PAUSE_MS        180000UL  // 3 min
 #define ADSB_TLS_HANDSHAKE_S       6        // NetworkClientSecure default is 120 s
+// Same cap for every other HTTPS fetch that shares the feed task (weather, rain radar,
+// clouds, map tiles, routes, photos). Their connect/read timeouts were short, but the TLS
+// handshake kept its 120 s default: when the link stalled mid-handshake the whole feed
+// task froze for two minutes -- no aircraft, and the >45 s self-heal could not run.
+#define NET_TLS_HANDSHAKE_S        6
 // airplanes.live: GET /v2/point/{lat}/{lon}/{radius_nm}, readsb format ("ac" list).
 #define ADSB_AIRPLANES_HOST "api.airplanes.live"
 // adsb.fi open data: GET /api/v3/lat/{lat}/lon/{lon}/dist/{nm} (max 250 NM), ADSBx-v2 format
